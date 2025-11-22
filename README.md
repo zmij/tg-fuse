@@ -25,36 +25,28 @@ cp presentation.pdf /dev/tg/#work_group
 
 ## Installation
 
-### Linux
-```bash
-# Install system dependencies only
-sudo apt install libfuse3-dev cmake build-essential  # Ubuntu/Debian
-# or
-sudo dnf install fuse3-devel cmake gcc-c++           # Fedora
+### Quick Install
 
-# Build from source - all dependencies fetched automatically
-git clone https://github.com/yourusername/tg-fuse
-cd tg-fuse
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-sudo make install
-```
-
-### macOS
 ```bash
-# Install system dependencies only
+# Install system dependencies
+# Ubuntu/Debian
+sudo apt install libfuse3-dev cmake build-essential pkg-config
+
+# Fedora
+sudo dnf install fuse3-devel cmake gcc-c++ pkg-config
+
+# macOS
 brew install macfuse cmake
-# or download macFUSE from: https://osxfuse.github.io/
 
-# Build from source - all dependencies fetched automatically  
+# Clone and build
 git clone https://github.com/yourusername/tg-fuse
 cd tg-fuse
-mkdir build && cd build
-cmake ..
-make -j$(sysctl -n hw.ncpu)
+make build-release
+cd build/release
 sudo make install
 ```
+
+**For detailed build instructions, troubleshooting, and development setup, see [BUILDING.md](BUILDING.md).**
 
 ## Quick Start
 
@@ -93,19 +85,16 @@ tg-fuse creates a virtual filesystem where each Telegram contact appears as a di
 - **macOS**: Uses `/tmp/tg` as default due to macOS filesystem restrictions
 - Both platforms support custom mount points via `tg-fuse mount <path>`
 
-## Build Requirements
+## Dependencies
 
-### System Dependencies (install manually)
-- **Linux**: libfuse3-dev, cmake, C++20 compiler
-- **macOS**: macFUSE, cmake, C++20 compiler (Xcode command line tools)
+**System dependencies** (install manually):
+- Linux: libfuse3-dev, cmake, C++20 compiler, pkg-config
+- macOS: macFUSE, cmake, C++20 compiler (Xcode command line tools)
 
-### Automatically Fetched Dependencies
-- **TDLib** - Official Telegram client library
-- **nlohmann/json** - JSON parsing for configuration
-- **spdlog** - Logging framework
-- **CLI11** - Command line argument parsing
+**Third-party dependencies** (fetched automatically):
+- TDLib, nlohmann/json, spdlog, CLI11, GoogleTest
 
-CMake's `FetchContent` automatically downloads and builds all third-party dependencies during the build process. No manual dependency management required!
+CMake automatically downloads and builds all third-party dependencies. See [BUILDING.md](BUILDING.md) for details.
 
 ## Architecture
 
@@ -121,14 +110,17 @@ Built with modern C++20 and conditional compilation for cross-platform FUSE supp
 
 ## Contributing
 
-Just clone and build! CMake handles all the dependency fetching automatically. No submodules, no manual dependency installation beyond system FUSE libraries.
+Contributions are welcome! The build system is simple:
 
 ```bash
 git clone https://github.com/yourusername/tg-fuse
 cd tg-fuse
-mkdir build && cd build
-cmake .. && make
+make build-debug        # Build with debug symbols
+make format             # Format code before committing
+cd build/debug && ctest # Run tests
 ```
+
+See [BUILDING.md](BUILDING.md) for development setup and [CLAUDE.md](CLAUDE.md) for project structure guidance.
 
 ## License
 
