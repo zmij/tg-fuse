@@ -86,3 +86,7 @@ tdlib/
 # Telegram session data
 *.session
 .telegram-session
+
+# Claude local settings
+.claude
+

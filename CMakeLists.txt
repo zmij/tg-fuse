@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 project(tg-fuse VERSION 0.1.0 LANGUAGES CXX)
 
-# Require C++20
-set(CMAKE_CXX_STANDARD 20)
+# Default to C++17 for dependencies (TDLib requirement)
+# Individual targets can override this
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -12,20 +13,51 @@ enable_testing()
 # Include FetchContent for dependency management
 include(FetchContent)
 
-# Platform detection
+# Platform detection and FUSE library setup
 if(APPLE)
-    set(FUSE_INCLUDE_DIR "/usr/local/include/osxfuse")
-    set(FUSE_LIBRARY_NAME "osxfuse")
-    add_compile_definitions(FUSE_USE_VERSION=29)
+    # macOS with macFUSE/osxfuse
+    set(FUSE_INCLUDE_DIR "/usr/local/include")
+    set(FUSE_LIBRARIES "/usr/local/lib/libfuse.dylib")
+    set(FUSE_VERSION 29)
+
+    # Create imported target for FUSE
+    add_library(fuse::fuse SHARED IMPORTED)
+    set_target_properties(fuse::fuse PROPERTIES
+        IMPORTED_LOCATION "${FUSE_LIBRARIES}"
+        INTERFACE_INCLUDE_DIRECTORIES "${FUSE_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS "FUSE_USE_VERSION=${FUSE_VERSION};_FILE_OFFSET_BITS=64"
+    )
+    message(STATUS "macOS FUSE library found: ${FUSE_LIBRARIES}")
+
 elseif(UNIX)
-    set(FUSE_INCLUDE_DIR "/usr/include/fuse3")
-    set(FUSE_LIBRARY_NAME "fuse3")
-    add_compile_definitions(FUSE_USE_VERSION=35)
+    # Linux with libfuse3
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FUSE REQUIRED IMPORTED_TARGET fuse3)
+    set(FUSE_VERSION 35)
+
+    # Create alias for consistency
+    add_library(fuse::fuse ALIAS PkgConfig::FUSE)
+    # Add compile definitions to the imported target
+    set_property(TARGET PkgConfig::FUSE APPEND PROPERTY
+        INTERFACE_COMPILE_DEFINITIONS "FUSE_USE_VERSION=${FUSE_VERSION};_FILE_OFFSET_BITS=64"
+    )
+    message(STATUS "Linux FUSE3 library found")
 endif()
 
-# Find FUSE library
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(FUSE REQUIRED ${FUSE_LIBRARY_NAME})
+# Disable tests and benchmarks for third-party libraries
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+set(SPDLOG_BUILD_TESTING OFF CACHE INTERNAL "")
+set(SPDLOG_BUILD_BENCH OFF CACHE INTERNAL "")
+set(CLI11_BUILD_TESTS OFF CACHE INTERNAL "")
+set(CLI11_BUILD_EXAMPLES OFF CACHE INTERNAL "")
+set(BUILD_GMOCK OFF CACHE INTERNAL "")
+set(INSTALL_GTEST OFF CACHE INTERNAL "")
+
+# Disable TDLib extras
+set(TD_ENABLE_TESTS OFF CACHE INTERNAL "")
+set(TD_ENABLE_BENCHMARKS OFF CACHE INTERNAL "")
+set(TD_ENABLE_JNI OFF CACHE INTERNAL "")
+set(TD_ENABLE_DOTNET OFF CACHE INTERNAL "")
 
 # Fetch nlohmann/json
 FetchContent_Declare(
@@ -59,7 +91,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     tdlib
     GIT_REPOSITORY https://github.com/tdlib/td.git
-    GIT_TAG v1.8.29
+    GIT_TAG master
 )
 
 # Make dependencies available

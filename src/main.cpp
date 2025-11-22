@@ -2,7 +2,7 @@
 #include <spdlog/spdlog.h>
 
 #ifdef __APPLE__
-#include <osxfuse/fuse.h>
+#include <fuse/fuse.h>
 #else
 #include <fuse3/fuse.h>
 #endif

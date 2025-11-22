@@ -3,15 +3,21 @@ add_executable(tg-fuse
     main.cpp
 )
 
+# Set C++ standard for this target (can be different from TDLib)
+set_target_properties(tg-fuse PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)
+
 # Include directories
 target_include_directories(tg-fuse PRIVATE
     ${PROJECT_SOURCE_DIR}/include
-    ${FUSE_INCLUDE_DIRS}
 )
 
-# Link libraries
+# Link libraries using modern CMake targets
 target_link_libraries(tg-fuse PRIVATE
-    ${FUSE_LIBRARIES}
+    fuse::fuse
     nlohmann_json::nlohmann_json
     spdlog::spdlog
     CLI11::CLI11
