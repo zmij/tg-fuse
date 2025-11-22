@@ -35,7 +35,7 @@ The easiest way to build the project is using the provided Makefile:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/tg-fuse
+git clone https://github.com/zmij/tg-fuse
 cd tg-fuse
 
 # Build debug version
@@ -236,3 +236,4 @@ The codebase uses conditional compilation for platform-specific code:
 ```
 
 Both platforms are fully supported and tested.
+
