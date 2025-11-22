@@ -2,6 +2,19 @@
 
 A FUSE-based virtual filesystem that lets you send files to Telegram contacts using standard Unix file operations.
 
+## 🚧 Development Status
+
+**Current Phase:** Phase 2 Complete - TDLib Integration Done
+**Progress:** ~75% Complete
+
+- ✅ Phase 1: Core infrastructure (data structures, coroutines, caching)
+- ✅ Phase 2: TDLib integration (authentication, messaging, files)
+- ⏳ Phase 3: Testing and refinement
+- ⏳ Phase 4: FUSE filesystem integration
+- ⏳ Phase 5: Polish and documentation
+
+See [PHASE2_COMPLETE.md](PHASE2_COMPLETE.md) for implementation details.
+
 ```bash
 # Send a file like you'd copy to any directory
 cp vacation_photos.zip /mnt/tg/@friend_username
