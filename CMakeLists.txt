@@ -7,9 +7,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Enable testing
-enable_testing()
-
 # Include FetchContent for dependency management
 include(FetchContent)
 
@@ -43,6 +40,9 @@ elseif(UNIX)
     )
     message(STATUS "Linux FUSE3 library found")
 endif()
+
+# Disable testing globally before fetching dependencies
+set(BUILD_TESTING OFF CACHE INTERNAL "Disable testing for dependencies")
 
 # Disable tests and benchmarks for third-party libraries
 set(JSON_BuildTests OFF CACHE INTERNAL "")
@@ -94,12 +94,19 @@ FetchContent_Declare(
     GIT_TAG master
 )
 
+# Find SQLite3 (system library)
+find_package(SQLite3 REQUIRED)
+
 # Make dependencies available
 FetchContent_MakeAvailable(nlohmann_json spdlog cli11 googletest tdlib)
+
+# Enable testing for our project only (after dependencies are loaded)
+enable_testing()
 
 # Add subdirectories
 add_subdirectory(src)
 add_subdirectory(tests)
+add_subdirectory(examples)
 
 # Install targets
 install(TARGETS tg-fuse

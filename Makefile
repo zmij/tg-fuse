@@ -1,10 +1,13 @@
-.PHONY: build-debug build-release clean-debug clean-release clean-all format help
+.PHONY: build-debug build-release clean-debug clean-release clean-all format test-debug test-release test help
 
 # Default target
 help:
 	@echo "Available targets:"
 	@echo "  build-debug    - Configure and build debug version in build/debug"
 	@echo "  build-release  - Configure and build release version in build/release"
+	@echo "  test-debug     - Build and run tests in debug mode"
+	@echo "  test-release   - Build and run tests in release mode"
+	@echo "  test           - Alias for test-debug"
 	@echo "  clean-debug    - Clean debug build directory"
 	@echo "  clean-release  - Clean release build directory"
 	@echo "  clean-all      - Clean both debug and release build directories"
@@ -53,3 +56,16 @@ format:
 	@echo "Formatting source files..."
 	@find src include tests -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -exec clang-format -i {} +
 	@echo "Formatting complete"
+
+# Test debug build
+test-debug: build-debug
+	@echo "Running tests in debug mode..."
+	@cd build/debug && ctest --output-on-failure --verbose
+
+# Test release build
+test-release: build-release
+	@echo "Running tests in release mode..."
+	@cd build/release && ctest --output-on-failure --verbose
+
+# Default test target (debug)
+test: test-debug
