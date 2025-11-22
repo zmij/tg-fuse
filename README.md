@@ -4,13 +4,13 @@ A FUSE-based virtual filesystem that lets you send files to Telegram contacts us
 
 ```bash
 # Send a file like you'd copy to any directory
-cp vacation_photos.zip /dev/tg/@friend_username
+cp vacation_photos.zip /mnt/tg/@friend_username
 
 # Send a quick message
-echo "Running late, be there in 10!" > /dev/tg/@friend_username/text
+echo "Running late, be there in 10!" > /mnt/tg/@friend_username/text
 
 # Send to a group chat
-cp presentation.pdf /dev/tg/#work_group
+cp presentation.pdf /mnt/tg/#work_group
 ```
 
 ## Features
@@ -25,36 +25,28 @@ cp presentation.pdf /dev/tg/#work_group
 
 ## Installation
 
-### Linux
-```bash
-# Install system dependencies only
-sudo apt install libfuse3-dev cmake build-essential  # Ubuntu/Debian
-# or
-sudo dnf install fuse3-devel cmake gcc-c++           # Fedora
+### Quick Install
 
-# Build from source - all dependencies fetched automatically
-git clone https://github.com/yourusername/tg-fuse
-cd tg-fuse
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
-sudo make install
-```
-
-### macOS
 ```bash
-# Install system dependencies only
+# Install system dependencies
+# Ubuntu/Debian
+sudo apt install libfuse3-dev cmake build-essential pkg-config
+
+# Fedora
+sudo dnf install fuse3-devel cmake gcc-c++ pkg-config
+
+# macOS
 brew install macfuse cmake
-# or download macFUSE from: https://osxfuse.github.io/
 
-# Build from source - all dependencies fetched automatically  
+# Clone and build
 git clone https://github.com/yourusername/tg-fuse
 cd tg-fuse
-mkdir build && cd build
-cmake ..
-make -j$(sysctl -n hw.ncpu)
+make build-release
+cd build/release
 sudo make install
 ```
+
+**For detailed build instructions, troubleshooting, and development setup, see [BUILDING.md](BUILDING.md).**
 
 ## Quick Start
 
@@ -63,15 +55,15 @@ sudo make install
 tg-fuse login
 
 # Mount the filesystem (Linux)
-tg-fuse mount /dev/tg
+tg-fuse mount /mnt/tg
 
 # Mount the filesystem (macOS - requires different path)
-tg-fuse mount /tmp/tg
+tg-fuse mount /Volumes/tg
 
 # Start sending files!
-cp document.pdf /dev/tg/@colleague        # Linux
-cp document.pdf /tmp/tg/@colleague        # macOS
-echo "Check this out" > /dev/tg/@colleague/text
+cp document.pdf /mnt/tg/@colleague        # Linux
+cp document.pdf /Volumes/tg/@colleague    # macOS
+echo "Check this out" > /mnt/tg/@colleague/text
 ```
 
 ## How it works
@@ -80,32 +72,29 @@ tg-fuse creates a virtual filesystem where each Telegram contact appears as a di
 
 **Filesystem structure:**
 ```
-/dev/tg/  (or /tmp/tg on macOS)
+/mnt/tg/  (or /Volumes/tg on macOS)
 ├── @username/          # Direct messages
-├── #groupname/         # Group chats  
+├── #groupname/         # Group chats
 ├── -1001234567890/     # Channels/supergroups
 └── .meta/              # Control interface
 ```
 
 ## Platform Notes
 
-- **Linux**: Uses `/dev/tg` as the default mount point (requires root for `/dev` access)
-- **macOS**: Uses `/tmp/tg` as default due to macOS filesystem restrictions
+- **Linux**: Uses `/mnt/tg` as the default mount point
+- **macOS**: Uses `/Volumes/tg` as the default mount point
 - Both platforms support custom mount points via `tg-fuse mount <path>`
 
-## Build Requirements
+## Dependencies
 
-### System Dependencies (install manually)
-- **Linux**: libfuse3-dev, cmake, C++20 compiler
-- **macOS**: macFUSE, cmake, C++20 compiler (Xcode command line tools)
+**System dependencies** (install manually):
+- Linux: libfuse3-dev, cmake, C++20 compiler, pkg-config
+- macOS: macFUSE, cmake, C++20 compiler (Xcode command line tools)
 
-### Automatically Fetched Dependencies
-- **TDLib** - Official Telegram client library
-- **nlohmann/json** - JSON parsing for configuration
-- **spdlog** - Logging framework
-- **CLI11** - Command line argument parsing
+**Third-party dependencies** (fetched automatically):
+- TDLib, nlohmann/json, spdlog, CLI11, GoogleTest
 
-CMake's `FetchContent` automatically downloads and builds all third-party dependencies during the build process. No manual dependency management required!
+CMake automatically downloads and builds all third-party dependencies. See [BUILDING.md](BUILDING.md) for details.
 
 ## Architecture
 
@@ -121,14 +110,17 @@ Built with modern C++20 and conditional compilation for cross-platform FUSE supp
 
 ## Contributing
 
-Just clone and build! CMake handles all the dependency fetching automatically. No submodules, no manual dependency installation beyond system FUSE libraries.
+Contributions are welcome! The build system is simple:
 
 ```bash
 git clone https://github.com/yourusername/tg-fuse
 cd tg-fuse
-mkdir build && cd build
-cmake .. && make
+make build-debug        # Build with debug symbols
+make format             # Format code before committing
+cd build/debug && ctest # Run tests
 ```
+
+See [BUILDING.md](BUILDING.md) for development setup and [CLAUDE.md](CLAUDE.md) for project structure guidance.
 
 ## License
 
