@@ -136,14 +136,12 @@ The first build will take longer as CMake downloads and compiles these dependenc
 
 #### Linux
 
-- Default mount point: `/dev/tg`
-- Requires root access to mount in `/dev`
+- Default mount point: `/mnt/tg`
 - Uses FUSE3 API (version 35)
 
 #### macOS
 
-- Default mount point: `/tmp/tg`
-- Cannot mount in `/dev` due to macOS restrictions
+- Default mount point: `/Volumes/tg`
 - Uses macFUSE/osxfuse API (version 29)
 - Requires macFUSE kernel extension to be loaded
 

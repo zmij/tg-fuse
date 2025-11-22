@@ -4,13 +4,13 @@ A FUSE-based virtual filesystem that lets you send files to Telegram contacts us
 
 ```bash
 # Send a file like you'd copy to any directory
-cp vacation_photos.zip /dev/tg/@friend_username
+cp vacation_photos.zip /mnt/tg/@friend_username
 
 # Send a quick message
-echo "Running late, be there in 10!" > /dev/tg/@friend_username/text
+echo "Running late, be there in 10!" > /mnt/tg/@friend_username/text
 
 # Send to a group chat
-cp presentation.pdf /dev/tg/#work_group
+cp presentation.pdf /mnt/tg/#work_group
 ```
 
 ## Features
@@ -55,15 +55,15 @@ sudo make install
 tg-fuse login
 
 # Mount the filesystem (Linux)
-tg-fuse mount /dev/tg
+tg-fuse mount /mnt/tg
 
 # Mount the filesystem (macOS - requires different path)
-tg-fuse mount /tmp/tg
+tg-fuse mount /Volumes/tg
 
 # Start sending files!
-cp document.pdf /dev/tg/@colleague        # Linux
-cp document.pdf /tmp/tg/@colleague        # macOS
-echo "Check this out" > /dev/tg/@colleague/text
+cp document.pdf /mnt/tg/@colleague        # Linux
+cp document.pdf /Volumes/tg/@colleague    # macOS
+echo "Check this out" > /mnt/tg/@colleague/text
 ```
 
 ## How it works
@@ -72,17 +72,17 @@ tg-fuse creates a virtual filesystem where each Telegram contact appears as a di
 
 **Filesystem structure:**
 ```
-/dev/tg/  (or /tmp/tg on macOS)
+/mnt/tg/  (or /Volumes/tg on macOS)
 ├── @username/          # Direct messages
-├── #groupname/         # Group chats  
+├── #groupname/         # Group chats
 ├── -1001234567890/     # Channels/supergroups
 └── .meta/              # Control interface
 ```
 
 ## Platform Notes
 
-- **Linux**: Uses `/dev/tg` as the default mount point (requires root for `/dev` access)
-- **macOS**: Uses `/tmp/tg` as default due to macOS filesystem restrictions
+- **Linux**: Uses `/mnt/tg` as the default mount point
+- **macOS**: Uses `/Volumes/tg` as the default mount point
 - Both platforms support custom mount points via `tg-fuse mount <path>`
 
 ## Dependencies

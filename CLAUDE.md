@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-tg-fuse is a FUSE-based virtual filesystem that enables sending files to Telegram contacts using standard Unix file operations. Users can `cp` files to virtual directories representing Telegram contacts (e.g., `/dev/tg/@username`).
+tg-fuse is a FUSE-based virtual filesystem that enables sending files to Telegram contacts using standard Unix file operations. Users can `cp` files to virtual directories representing Telegram contacts (e.g., `/mnt/tg/@username`).
 
 ## Build System
 
@@ -44,8 +44,8 @@ sudo make install
 tg-fuse login
 
 # Mount filesystem
-tg-fuse mount /dev/tg    # Linux
-tg-fuse mount /tmp/tg    # macOS
+tg-fuse mount /mnt/tg       # Linux
+tg-fuse mount /Volumes/tg   # macOS
 ```
 
 ## Dependencies
@@ -73,8 +73,8 @@ The codebase uses conditional compilation for FUSE headers:
 ```
 
 ### Mount points
-- Linux: `/dev/tg` (default, requires root for `/dev` access)
-- macOS: `/tmp/tg` (default due to macOS filesystem restrictions)
+- Linux: `/mnt/tg` (default)
+- macOS: `/Volumes/tg` (default)
 
 ## Architecture
 
