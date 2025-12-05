@@ -1,3 +1,4 @@
+#include "cache.hpp"
 #include "config.hpp"
 #include "login.hpp"
 #include "users.hpp"
@@ -123,6 +124,24 @@ int main(int argc, char* argv[]) {
     bool list_users = false;
     users_cmd->add_flag("--list,-l", list_users, "List all users from private chats");
 
+    // Cache subcommand with nested subcommands
+    auto* cache_cmd = app.add_subcommand("cache", "Manage caches");
+    cache_cmd->require_subcommand(1);
+
+    // cache clear-files [entity]
+    auto* cache_clear_files_cmd = cache_cmd->add_subcommand("clear-files", "Clear file cache for a specific chat");
+    std::string cache_entity_name;
+    cache_clear_files_cmd->add_option("entity", cache_entity_name, "Username or display name of the chat");
+
+    // cache clear-all-files
+    cache_cmd->add_subcommand("clear-all-files", "Clear all file caches");
+
+    // cache clear-all
+    cache_cmd->add_subcommand("clear-all", "Clear all caches (messages, files, etc.)");
+
+    // cache stats
+    cache_cmd->add_subcommand("stats", "Show cache statistics");
+
     // Config subcommand with nested subcommands
     auto* config_cmd = app.add_subcommand("config", "Manage configuration");
     config_cmd->require_subcommand(1);
@@ -172,6 +191,25 @@ int main(int argc, char* argv[]) {
         }
         // Default to list if no flag specified
         return tgfuse::ctl::exec_users_list();
+    }
+
+    if (cache_clear_files_cmd->parsed()) {
+        if (cache_entity_name.empty()) {
+            return tgfuse::ctl::exec_cache_clear_all_files();
+        }
+        return tgfuse::ctl::exec_cache_clear_files(cache_entity_name);
+    }
+
+    if (cache_cmd->got_subcommand("clear-all-files")) {
+        return tgfuse::ctl::exec_cache_clear_all_files();
+    }
+
+    if (cache_cmd->got_subcommand("clear-all")) {
+        return tgfuse::ctl::exec_cache_clear_all();
+    }
+
+    if (cache_cmd->got_subcommand("stats")) {
+        return tgfuse::ctl::exec_cache_stats();
     }
 
     return 0;

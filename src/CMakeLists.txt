@@ -116,6 +116,7 @@ target_compile_options(tg-fused PRIVATE
 # tg-fuse CLI companion app
 add_executable(tg-fuse
     ctl/main.cpp
+    ctl/cache.cpp
     ctl/config.cpp
     ctl/login.cpp
     ctl/users.cpp
