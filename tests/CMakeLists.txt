@@ -1,10 +1,10 @@
 # Test executable
 add_executable(tg-fuse-tests
-    example_test.cpp
     tg/types_test.cpp
     tg/cache_test.cpp
     tg/async_test.cpp
     tg/formatters_test.cpp
+    tg/bustache_format_test.cpp
 )
 
 # Set C++20 for tests (required for coroutines)
@@ -26,6 +26,7 @@ target_link_libraries(tg-fuse-tests PRIVATE
     GTest::gtest_main
     nlohmann_json::nlohmann_json
     spdlog::spdlog
+    bustache
 )
 
 # Compiler flags
