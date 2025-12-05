@@ -48,8 +48,8 @@ struct Entry {
         return e;
     }
 
-    /// Create a symlink entry (symlinks conventionally use 0777, target perms apply)
-    static Entry symlink(std::string name, std::string target, mode_t mode = 0777) {
+    /// Create a symlink entry
+    static Entry symlink(std::string name, std::string target, mode_t mode = 0755) {
         Entry e;
         e.name = std::move(name);
         e.type = EntryType::SYMLINK;
@@ -118,6 +118,16 @@ public:
     /// Get filesystem name
     /// @return Name of the filesystem
     [[nodiscard]] virtual std::string get_filesystem_name() const = 0;
+
+    /// Set the mount point for absolute symlink targets
+    /// @param mount_point The mount point path
+    virtual void set_mount_point(std::string mount_point) { mount_point_ = std::move(mount_point); }
+
+    /// Get the mount point
+    [[nodiscard]] const std::string& get_mount_point() const { return mount_point_; }
+
+protected:
+    std::string mount_point_;
 };
 
 }  // namespace tgfuse
