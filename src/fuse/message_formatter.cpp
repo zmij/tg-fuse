@@ -1,127 +1,6 @@
 #include "fuse/message_formatter.hpp"
 
-#include <fmt/format.h>
-#include <algorithm>
-#include <ctime>
-
 namespace tgfuse {
-
-namespace {
-
-/// Format media type as a display string
-std::string_view format_media_tag(const tg::MediaInfo& media) {
-    switch (media.type) {
-        case tg::MediaType::PHOTO:
-            return "[photo]";
-        case tg::MediaType::VIDEO:
-            return "[video]";
-        case tg::MediaType::VOICE:
-            return "[voice message]";
-        case tg::MediaType::ANIMATION:
-            return "[animation]";
-        case tg::MediaType::STICKER:
-            return "[sticker]";
-        case tg::MediaType::VIDEO_NOTE:
-            return "[video note]";
-        default:
-            return "";  // DOCUMENT and AUDIO need filename, handled separately
-    }
-}
-
-/// Format media with filename for document/audio types
-std::string format_media_with_filename(const tg::MediaInfo& media) {
-    switch (media.type) {
-        case tg::MediaType::DOCUMENT:
-            return fmt::format("[document: {}]", media.filename);
-        case tg::MediaType::AUDIO:
-            return fmt::format("[audio: {}]", media.filename);
-        default:
-            return std::string(format_media_tag(media));
-    }
-}
-
-/// Replace newlines with blockquote continuations
-std::string escape_newlines_for_blockquote(std::string_view text) {
-    std::string result;
-    result.reserve(text.size() + text.size() / 20);  // Estimate extra space for "> "
-
-    for (char c : text) {
-        if (c == '\n') {
-            result += "\n> ";
-        } else {
-            result += c;
-        }
-    }
-    return result;
-}
-
-}  // namespace
-
-std::string MessageFormatter::format_message(const tg::Message& msg, const SenderInfo& sender) {
-    // Format timestamp as HH:MM
-    std::time_t time = static_cast<std::time_t>(msg.timestamp);
-    std::tm* tm = std::localtime(&time);
-
-    // Build sender string
-    std::string sender_str;
-    if (sender.is_outgoing) {
-        sender_str = "You";
-    } else if (!sender.username.empty()) {
-        sender_str = fmt::format("{} (@{})", sender.display_name, sender.username);
-    } else {
-        sender_str = sender.display_name;
-    }
-
-    // Build content string
-    std::string content;
-    if (msg.has_media() && msg.text.empty()) {
-        // Media-only message
-        content = format_media_with_filename(msg.media.value());
-    } else {
-        // Text message (possibly with media)
-        content = escape_newlines_for_blockquote(msg.text);
-
-        if (msg.has_media()) {
-            content += ' ';
-            content += format_media_with_filename(msg.media.value());
-        }
-    }
-
-    return fmt::format("> **{}** *{:02d}:{:02d}* {}\n\n", sender_str, tm->tm_hour, tm->tm_min, content);
-}
-
-std::string MessageFormatter::format_messages(
-    const std::vector<tg::Message>& messages,
-    const std::function<SenderInfo(int64_t)>& get_sender
-) {
-    if (messages.empty()) {
-        return "";
-    }
-
-    // Sort messages by timestamp (oldest first for display)
-    std::vector<tg::Message> sorted = messages;
-    std::sort(sorted.begin(), sorted.end(), [](const tg::Message& a, const tg::Message& b) {
-        return a.timestamp < b.timestamp;
-    });
-
-    // Remove duplicates by message ID (keep first occurrence after sort)
-    auto last = std::unique(sorted.begin(), sorted.end(), [](const tg::Message& a, const tg::Message& b) {
-        return a.id == b.id;
-    });
-    sorted.erase(last, sorted.end());
-
-    // Pre-calculate total size estimate for reservation
-    std::string result;
-    result.reserve(sorted.size() * AVG_MESSAGE_SIZE);
-
-    for (const auto& msg : sorted) {
-        SenderInfo sender = get_sender(msg.sender_id);
-        sender.is_outgoing = msg.is_outgoing;
-        result += format_message(msg, sender);
-    }
-
-    return result;
-}
 
 std::size_t MessageFormatter::estimate_size(std::size_t message_count) {
     if (message_count == 0) {
@@ -188,11 +67,6 @@ std::vector<std::string> MessageFormatter::split_message(const std::string& text
                 split_pos = i;
                 break;
             }
-        }
-
-        // If no whitespace found, force split at max_size
-        if (split_pos == chunk_end) {
-            split_pos = chunk_end;
         }
 
         chunks.push_back(text.substr(pos, split_pos - pos));

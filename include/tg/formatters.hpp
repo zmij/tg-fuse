@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tg/types.hpp"
+#include "types.hpp"
 
 #include <fmt/chrono.h>
 #include <fmt/format.h>
@@ -31,87 +32,17 @@ inline std::string format_datetime(int64_t timestamp) {
 
 template <>
 struct fmt::formatter<tg::UserStatus> : fmt::formatter<std::string_view> {
-    auto format(tg::UserStatus status, fmt::format_context& ctx) const {
-        std::string_view name;
-        switch (status) {
-            case tg::UserStatus::ONLINE:
-                name = "online";
-                break;
-            case tg::UserStatus::OFFLINE:
-                name = "offline";
-                break;
-            case tg::UserStatus::RECENTLY:
-                name = "recently";
-                break;
-            case tg::UserStatus::LAST_WEEK:
-                name = "last week";
-                break;
-            case tg::UserStatus::LAST_MONTH:
-                name = "last month";
-                break;
-            case tg::UserStatus::UNKNOWN:
-            default:
-                name = "unknown";
-                break;
-        }
-        return fmt::formatter<std::string_view>::format(name, ctx);
-    }
-};
-
-template <>
-struct fmt::formatter<tg::ChatType> : fmt::formatter<std::string_view> {
-    auto format(tg::ChatType type, fmt::format_context& ctx) const {
-        std::string_view name;
-        switch (type) {
-            case tg::ChatType::PRIVATE:
-                name = "private";
-                break;
-            case tg::ChatType::GROUP:
-                name = "group";
-                break;
-            case tg::ChatType::SUPERGROUP:
-                name = "supergroup";
-                break;
-            case tg::ChatType::CHANNEL:
-                name = "channel";
-                break;
-        }
-        return fmt::formatter<std::string_view>::format(name, ctx);
-    }
+    auto format(tg::UserStatus status, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
 struct fmt::formatter<tg::MediaType> : fmt::formatter<std::string_view> {
-    auto format(tg::MediaType type, fmt::format_context& ctx) const {
-        std::string_view name;
-        switch (type) {
-            case tg::MediaType::PHOTO:
-                name = "photo";
-                break;
-            case tg::MediaType::VIDEO:
-                name = "video";
-                break;
-            case tg::MediaType::DOCUMENT:
-                name = "document";
-                break;
-            case tg::MediaType::AUDIO:
-                name = "audio";
-                break;
-            case tg::MediaType::VOICE:
-                name = "voice message";
-                break;
-            case tg::MediaType::ANIMATION:
-                name = "animation";
-                break;
-            case tg::MediaType::STICKER:
-                name = "sticker";
-                break;
-            case tg::MediaType::VIDEO_NOTE:
-                name = "video note";
-                break;
-        }
-        return fmt::formatter<std::string_view>::format(name, ctx);
-    }
+    auto format(tg::MediaType type, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<tg::ChatType> : fmt::formatter<std::string_view> {
+    auto format(tg::ChatType type, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
@@ -126,12 +57,25 @@ struct fmt::formatter<tg::MediaInfo> : fmt::formatter<std::string_view> {
 
 template <>
 struct fmt::formatter<tg::User> : fmt::formatter<std::string_view> {
-    auto format(const tg::User& user, fmt::format_context& ctx) const {
-        if (!user.username.empty()) {
-            return fmt::format_to(ctx.out(), "{} (@{})", user.display_name(), user.username);
+    enum class Format : char {
+        DISPLAY_NAME = 'd',
+        USERNAME = 'u',
+        FULL_NAME = 'f',
+        IDENTIFIER = 'i',
+    };
+
+    Format format_spec{Format::DISPLAY_NAME};
+
+    constexpr auto parse(format_parse_context& ctx) -> decltype(ctx.begin()) {
+        auto it = ctx.begin();
+        if (it != ctx.end() && (*it == 'd' || *it == 'u' || *it == 'f' || *it == 'i')) {
+            format_spec = static_cast<Format>(*it);
+            ++it;
         }
-        return fmt::format_to(ctx.out(), "{}", user.display_name());
+        return it;
     }
+
+    auto format(const tg::User& user, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
@@ -142,4 +86,9 @@ struct fmt::formatter<tg::Chat> : fmt::formatter<std::string_view> {
         }
         return fmt::format_to(ctx.out(), "{}", chat.title);
     }
+};
+
+template <>
+struct fmt::formatter<tg::MessageInfo> : fmt::formatter<std::string_view> {
+    auto format(const tg::MessageInfo& info, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

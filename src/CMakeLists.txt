@@ -3,6 +3,7 @@ add_library(tglib STATIC
     tg/types.cpp
     tg/cache.cpp
     tg/client.cpp
+    tg/formatters.cpp
 )
 
 # Set C++20 for the wrapper library (uses coroutines)

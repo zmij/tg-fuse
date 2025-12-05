@@ -169,8 +169,11 @@ private:
 
     mutable std::mutex mutex_;
 
-    /// Create sender resolver function for message formatting
-    [[nodiscard]] SenderResolver make_sender_resolver() const;
+    /// Create user resolver function for message formatting
+    [[nodiscard]] UserResolver make_user_resolver() const;
+
+    /// Create chat resolver function for message formatting
+    [[nodiscard]] ChatResolver make_chat_resolver() const;
 
     /// Set up message callback to update cache on new messages
     void setup_message_callback();
