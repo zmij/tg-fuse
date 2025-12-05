@@ -66,6 +66,13 @@ struct FileContent {
     bool readable{true};
 };
 
+/// Write operation result
+struct WriteResult {
+    bool success{false};
+    int bytes_written{0};
+    std::string error_message;
+};
+
 /// Abstract data provider interface
 ///
 /// This interface defines the contract for filesystem data sources.
@@ -112,6 +119,48 @@ public:
     /// @param path Absolute path to the symlink
     /// @return Target path of the symlink
     [[nodiscard]] virtual std::string read_link(std::string_view path) = 0;
+
+    // Write operations
+
+    /// Write to a file (for append-only files like messages)
+    /// @param path Absolute path to the file
+    /// @param data Data to write
+    /// @param size Size of data
+    /// @param offset Write offset (ignored for append-only)
+    /// @return WriteResult with status
+    virtual WriteResult write_file(std::string_view path, const char* data, std::size_t size, off_t offset) {
+        (void)path;
+        (void)data;
+        (void)size;
+        (void)offset;
+        return WriteResult{false, 0, "Write not supported"};
+    }
+
+    /// Truncate a file
+    /// @param path Absolute path to the file
+    /// @param size New file size
+    /// @return 0 on success, negative errno on error
+    virtual int truncate_file(std::string_view path, off_t size) {
+        (void)path;
+        (void)size;
+        return -EACCES;  // Default: not supported
+    }
+
+    /// Check if a file is writable
+    /// @param path Absolute path to check
+    /// @return true if the file is writable
+    [[nodiscard]] virtual bool is_writable(std::string_view path) const {
+        (void)path;
+        return false;
+    }
+
+    /// Check if a file is append-only
+    /// @param path Absolute path to check
+    /// @return true if the file is append-only
+    [[nodiscard]] virtual bool is_append_only(std::string_view path) const {
+        (void)path;
+        return false;
+    }
 
     // Metadata
 

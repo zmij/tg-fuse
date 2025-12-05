@@ -415,6 +415,14 @@ public:
                 auto message = convert_message(*message_update->message_);
                 cache_->cache_message(message);
                 spdlog::debug("updateNewMessage: id={} chat={}", message.id, message.chat_id);
+
+                // Notify callback if set
+                {
+                    std::lock_guard<std::mutex> lock(message_callback_mutex_);
+                    if (message_callback_) {
+                        message_callback_(message);
+                    }
+                }
                 break;
             }
 
@@ -603,6 +611,75 @@ public:
                 }
             }
         }
+
+        return result;
+    }
+
+    // Get chat history with pagination from a specific message
+    std::vector<Message> get_chat_history_from_sync(int64_t chat_id, int64_t from_message_id, int limit) {
+        std::vector<Message> result;
+
+        auto response =
+            send_query_sync(td_api::make_object<td_api::getChatHistory>(chat_id, from_message_id, 0, limit, false));
+
+        if (response->get_id() == td_api::messages::ID) {
+            auto messages_obj = td::move_tl_object_as<td_api::messages>(response);
+
+            for (auto& msg_ptr : messages_obj->messages_) {
+                if (msg_ptr) {
+                    auto message = convert_message(*msg_ptr);
+                    cache_->cache_message(message);
+                    result.push_back(std::move(message));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Get messages iteratively until conditions are met
+    std::vector<Message>
+    get_messages_until_sync(int64_t chat_id, std::size_t min_messages, std::chrono::seconds max_age) {
+        std::vector<Message> result;
+        int64_t from_message_id = 0;
+        constexpr int batch_size = 50;
+
+        auto now = std::chrono::system_clock::now();
+        auto cutoff = now - max_age;
+        auto cutoff_ts = std::chrono::duration_cast<std::chrono::seconds>(cutoff.time_since_epoch()).count();
+
+        while (true) {
+            auto batch = get_chat_history_from_sync(chat_id, from_message_id, batch_size);
+
+            if (batch.empty()) {
+                // No more messages
+                break;
+            }
+
+            for (auto& msg : batch) {
+                result.push_back(std::move(msg));
+            }
+
+            // Check termination conditions
+            // API returns newest first, so last message in batch is oldest
+            const auto& oldest = result.back();
+
+            // Have enough messages AND oldest is older than cutoff
+            if (result.size() >= min_messages && oldest.timestamp < cutoff_ts) {
+                break;
+            }
+
+            // Set up for next batch: continue from oldest message
+            from_message_id = oldest.id;
+        }
+
+        spdlog::debug(
+            "get_messages_until_sync: chat {} fetched {} messages (min={}, max_age={}s)",
+            chat_id,
+            result.size(),
+            min_messages,
+            max_age.count()
+        );
 
         return result;
     }
@@ -856,6 +933,16 @@ private:
     // Authorization synchronisation
     mutable std::mutex auth_mutex_;
     std::condition_variable auth_cv_;
+
+    // Message callback
+    std::function<void(const Message&)> message_callback_;
+    std::mutex message_callback_mutex_;
+
+public:
+    void set_message_callback(std::function<void(const Message&)> callback) {
+        std::lock_guard<std::mutex> lock(message_callback_mutex_);
+        message_callback_ = std::move(callback);
+    }
 };
 
 // TelegramClient implementation
@@ -956,6 +1043,11 @@ Task<std::vector<Message>> TelegramClient::get_last_n_messages(int64_t chat_id, 
     co_return co_await get_messages(chat_id, n);
 }
 
+Task<std::vector<Message>>
+TelegramClient::get_messages_until(int64_t chat_id, std::size_t min_messages, std::chrono::seconds max_age) {
+    co_return impl_->get_messages_until_sync(chat_id, min_messages, max_age);
+}
+
 Task<Message> TelegramClient::send_file(int64_t chat_id, const std::string& path, SendMode mode) {
     co_return impl_->send_file_sync(chat_id, path, mode);
 }
@@ -1022,5 +1114,9 @@ Task<ChatStatus> TelegramClient::get_chat_status(int64_t chat_id) {
 }
 
 Task<std::string> TelegramClient::get_user_bio(int64_t user_id) { co_return impl_->get_user_bio_sync(user_id); }
+
+void TelegramClient::set_message_callback(MessageCallback callback) {
+    impl_->set_message_callback(std::move(callback));
+}
 
 }  // namespace tg

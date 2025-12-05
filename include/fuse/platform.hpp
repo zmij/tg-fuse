@@ -85,6 +85,21 @@ public:
     /// @param fi File info
     /// @return 0 on success, negative errno on error
     virtual int release(const char* path, struct fuse_file_info* fi) = 0;
+
+    /// Write data to a file
+    /// @param path Path to the file
+    /// @param buf Data buffer
+    /// @param size Number of bytes to write
+    /// @param offset Write offset
+    /// @param fi File info
+    /// @return Number of bytes written, or negative errno on error
+    virtual int write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi) = 0;
+
+    /// Truncate a file to a specified length
+    /// @param path Path to the file
+    /// @param size New file size
+    /// @return 0 on success, negative errno on error
+    virtual int truncate(const char* path, off_t size) = 0;
 };
 
 /// Platform-specific adapter that wraps FuseOperations

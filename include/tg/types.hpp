@@ -60,6 +60,9 @@ struct User {
     int64_t last_message_id{0};
     int64_t last_message_timestamp{0};
 
+    // Helper to check if user has a display name
+    bool has_name() const { return !first_name.empty() || !last_name.empty(); }
+
     // Helper to get display name
     std::string display_name() const;
 
@@ -120,6 +123,12 @@ struct Message {
 
     // Helper to format message for display
     std::string format_for_display() const;
+};
+
+struct MessageInfo {
+    const Message& message;
+    const User& sender;
+    const Chat& chat;
 };
 
 struct FileListItem {
