@@ -6,7 +6,8 @@
 
 namespace tgfuse {
 
-FormattedMessagesCache::FormattedMessagesCache(Config config) : config_(std::move(config)) {}
+FormattedMessagesCache::FormattedMessagesCache(Config config)
+    : config_(std::move(config)), message_template_(config_.message_format) {}
 
 std::optional<std::string_view> FormattedMessagesCache::get(int64_t chat_id) {
     std::lock_guard<std::mutex> lock(mutex_);

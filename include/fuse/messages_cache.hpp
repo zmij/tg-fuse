@@ -2,6 +2,8 @@
 
 #include "tg/types.hpp"
 
+#include <bustache/format.hpp>
+
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -25,6 +27,10 @@ struct MessagesCacheConfig {
     std::chrono::seconds format_ttl = std::chrono::hours{1};        // Formatted text staleness TTL (1 hour)
     std::chrono::seconds max_history_age = std::chrono::hours{48};  // Max age of messages to display
     std::size_t min_messages = 10;                                  // Minimum messages to fetch from API
+
+    /// Mustache template for formatting individual messages
+    /// Available placeholders: {{sender}}, {{time}}, {{message}}
+    std::string message_format = "> **{{sender}}** [{{time}}]: {{message}}";
 };
 
 /// TLRU (Time-aware LRU) cache for formatted message content per chat
@@ -93,6 +99,9 @@ public:
     /// Get the cache configuration
     [[nodiscard]] const Config& get_config() const { return config_; }
 
+    /// Get the compiled message template for formatting
+    [[nodiscard]] const bustache::format& message_template() const { return message_template_; }
+
     /// Get cache statistics
     struct Stats {
         std::size_t chat_count;
@@ -110,6 +119,7 @@ private:
     void evict_if_needed();
 
     Config config_;
+    bustache::format message_template_;  // Compiled template (thread-safe for reads)
 
     // LRU list: front = most recently used, back = least recently used
     std::list<int64_t> lru_list_;

@@ -2,11 +2,13 @@
 
 #include "fuse/constants.hpp"
 #include "fuse/message_formatter.hpp"
+#include "tg/bustache_formatters.hpp"
 #include "tg/formatters.hpp"
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <spdlog/spdlog.h>
+#include <bustache/render/string.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -1224,7 +1226,13 @@ std::string TelegramDataProvider::format_and_cache_messages(int64_t chat_id, con
         infos.push_back({msg, user_resolver(msg.sender_id), chat_resolver(chat_id)});
     }
 
-    std::string content = fmt::format("{}\n", fmt::join(infos, "\n"));
+    // Format messages using bustache template
+    std::string content;
+    const auto& tmpl = messages_cache_->message_template();
+    for (const auto& info : infos) {
+        content += bustache::to_string(tmpl(info));
+        content += '\n';
+    }
 
     // Store in TLRU cache
     int64_t newest_id = messages.empty() ? 0 : messages.back().id;
