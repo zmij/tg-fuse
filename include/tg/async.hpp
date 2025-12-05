@@ -52,9 +52,7 @@ public:
         return std::get<T>(result_);
     }
 
-    void set_continuation(std::coroutine_handle<> continuation) {
-        continuation_ = continuation;
-    }
+    void set_continuation(std::coroutine_handle<> continuation) { continuation_ = continuation; }
 
 private:
     std::variant<std::monostate, T, std::exception_ptr> result_;
@@ -98,9 +96,7 @@ public:
         }
     }
 
-    void set_continuation(std::coroutine_handle<> continuation) {
-        continuation_ = continuation;
-    }
+    void set_continuation(std::coroutine_handle<> continuation) { continuation_ = continuation; }
 
 private:
     std::exception_ptr exception_;
@@ -194,9 +190,7 @@ Task<T> TaskPromise<T>::get_return_object() noexcept {
     return Task<T>{Handle::from_promise(*this)};
 }
 
-inline Task<void> TaskPromise<void>::get_return_object() noexcept {
-    return Task<void>{Handle::from_promise(*this)};
-}
+inline Task<void> TaskPromise<void>::get_return_object() noexcept { return Task<void>{Handle::from_promise(*this)}; }
 
 }  // namespace detail
 
@@ -213,9 +207,7 @@ public:
 
             bool await_ready() const noexcept { return promise.ready_; }
 
-            void await_suspend(std::coroutine_handle<> continuation) noexcept {
-                promise.continuation_ = continuation;
-            }
+            void await_suspend(std::coroutine_handle<> continuation) noexcept { promise.continuation_ = continuation; }
 
             T await_resume() {
                 if (promise.exception_) {
@@ -231,7 +223,9 @@ public:
     }
 
     // Called by TDLib callback to complete the promise with a value
-    void set_value(T value) requires(!std::is_void_v<T>) {
+    void set_value(T value)
+    requires(!std::is_void_v<T>)
+    {
         value_ = std::move(value);
         ready_ = true;
         if (continuation_) {
@@ -240,7 +234,9 @@ public:
     }
 
     // Specialisation for void
-    void set_value() requires(std::is_void_v<T>) {
+    void set_value()
+    requires(std::is_void_v<T>)
+    {
         ready_ = true;
         if (continuation_) {
             continuation_.resume();
@@ -275,9 +271,7 @@ public:
 
             bool await_ready() const noexcept { return promise.ready_; }
 
-            void await_suspend(std::coroutine_handle<> continuation) noexcept {
-                promise.continuation_ = continuation;
-            }
+            void await_suspend(std::coroutine_handle<> continuation) noexcept { promise.continuation_ = continuation; }
 
             void await_resume() {
                 if (promise.exception_) {
