@@ -38,12 +38,12 @@ enum class AuthState {
 };
 
 enum class UserStatus {
-    ONLINE,      // Currently online
-    OFFLINE,     // Offline with known last seen timestamp
-    RECENTLY,    // Within last 2-3 days
-    LAST_WEEK,   // Within last week
-    LAST_MONTH,  // Within last month
-    UNKNOWN      // Never seen or hidden
+    UNKNOWN,    // Default - never seen or hidden
+    ONLINE,     // Currently online
+    OFFLINE,    // Offline with known last seen timestamp
+    RECENTLY,   // Within last 2-3 days
+    LAST_WEEK,  // Within last week
+    LAST_MONTH  // Within last month
 };
 
 // Data structures
