@@ -74,8 +74,8 @@ TEST_F(CacheTest, GetNonExistentUser) {
 }
 
 TEST_F(CacheTest, GetAllCachedUsers) {
-    User user1{123, "alice", "Alice", "", "", true, 0, 0};
-    User user2{456, "bob", "Bob", "", "", false, 0, 0};
+    User user1{123, "alice", "Alice", "", "", "", true, UserStatus::UNKNOWN, 0, 0, 0};
+    User user2{456, "bob", "Bob", "", "", "", false, UserStatus::UNKNOWN, 0, 0, 0};
 
     cache_->cache_user(user1);
     cache_->cache_user(user2);
@@ -85,7 +85,7 @@ TEST_F(CacheTest, GetAllCachedUsers) {
 }
 
 TEST_F(CacheTest, UpdateExistingUser) {
-    User user{123, "alice", "Alice", "", "", true, 0, 0};
+    User user{123, "alice", "Alice", "", "", "", true, UserStatus::UNKNOWN, 0, 0, 0};
     cache_->cache_user(user);
 
     // Update user
@@ -328,7 +328,7 @@ TEST_F(CacheTest, InvalidateChat) {
 }
 
 TEST_F(CacheTest, ClearAll) {
-    User user{123, "alice", "Alice", "", "", true, 0, 0};
+    User user{123, "alice", "Alice", "", "", "", true, UserStatus::UNKNOWN, 0, 0, 0};
     Chat chat{456, ChatType::GROUP, "Group", "group", 0, 0};
     Message msg{1, 456, 123, 1234567890, "Message", std::nullopt, false};
 
@@ -374,7 +374,7 @@ TEST_F(CacheTest, ConcurrentUserCaching) {
 
 TEST_F(CacheTest, ConcurrentReadWrite) {
     // Add initial user
-    User initial_user{1, "test", "Test", "", "", true, 0, 0};
+    User initial_user{1, "test", "Test", "", "", "", true, UserStatus::UNKNOWN, 0, 0, 0};
     cache_->cache_user(initial_user);
 
     std::atomic<int> read_count{0};
@@ -398,7 +398,7 @@ TEST_F(CacheTest, ConcurrentReadWrite) {
     for (int i = 0; i < 5; ++i) {
         threads.emplace_back([this, &write_count]() {
             for (int j = 0; j < 1000; ++j) {
-                User user{1, "test", "Test Updated", "", "", true, 0, 0};
+                User user{1, "test", "Test Updated", "", "", "", true, UserStatus::UNKNOWN, 0, 0, 0};
                 cache_->cache_user(user);
                 write_count++;
             }
@@ -415,7 +415,7 @@ TEST_F(CacheTest, ConcurrentReadWrite) {
 
 // Persistence test
 TEST_F(CacheTest, Persistence) {
-    User user{123, "alice", "Alice", "", "", true, 0, 0};
+    User user{123, "alice", "Alice", "", "", "", true, UserStatus::UNKNOWN, 0, 0, 0};
     cache_->cache_user(user);
 
     // Close and reopen

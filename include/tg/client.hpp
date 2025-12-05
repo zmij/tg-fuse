@@ -70,6 +70,9 @@ public:
     // Chat status polling
     Task<ChatStatus> get_chat_status(int64_t chat_id);
 
+    // Get user bio (lazy loaded)
+    Task<std::string> get_user_bio(int64_t user_id);
+
     // Cache access
     CacheManager& cache() { return *cache_; }
     const CacheManager& cache() const { return *cache_; }
