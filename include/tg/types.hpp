@@ -16,40 +16,31 @@ struct FileListItem;
 
 // Enumerations
 enum class ChatType {
-    PRIVATE,      // Direct message with a user
-    GROUP,        // Basic group
-    SUPERGROUP,   // Supergroup
-    CHANNEL       // Channel (broadcast)
+    PRIVATE,     // Direct message with a user
+    GROUP,       // Basic group
+    SUPERGROUP,  // Supergroup
+    CHANNEL      // Channel (broadcast)
 };
 
-enum class MediaType {
-    PHOTO,
-    VIDEO,
-    DOCUMENT,
-    AUDIO,
-    VOICE,
-    ANIMATION,
-    STICKER,
-    VIDEO_NOTE
-};
+enum class MediaType { PHOTO, VIDEO, DOCUMENT, AUDIO, VOICE, ANIMATION, STICKER, VIDEO_NOTE };
 
 enum class SendMode {
-    AUTO,         // Auto-detect based on file type
-    MEDIA,        // Send as media (compressed photos/videos)
-    DOCUMENT      // Send as document (original file)
+    AUTO,     // Auto-detect based on file type
+    MEDIA,    // Send as media (compressed photos/videos)
+    DOCUMENT  // Send as document (original file)
 };
 
 enum class AuthState {
-    WAIT_PHONE,      // Waiting for phone number
-    WAIT_CODE,       // Waiting for authentication code
-    WAIT_PASSWORD,   // Waiting for 2FA password
-    READY            // Authenticated and ready
+    WAIT_PHONE,     // Waiting for phone number
+    WAIT_CODE,      // Waiting for authentication code
+    WAIT_PASSWORD,  // Waiting for 2FA password
+    READY           // Authenticated and ready
 };
 
 // Data structures
 struct User {
     int64_t id;
-    std::string username;         // Without @ prefix
+    std::string username;  // Without @ prefix
     std::string first_name;
     std::string last_name;
     std::string phone_number;
@@ -68,7 +59,7 @@ struct Chat {
     int64_t id;
     ChatType type;
     std::string title;
-    std::string username;         // For public groups/channels (without @ or #)
+    std::string username;  // For public groups/channels (without @ or #)
     int64_t last_message_id;
     int64_t last_message_timestamp;
 
@@ -104,7 +95,7 @@ struct Message {
     int64_t id;
     int64_t chat_id;
     int64_t sender_id;
-    int64_t timestamp;               // Unix timestamp
+    int64_t timestamp;  // Unix timestamp
     std::string text;
     std::optional<MediaInfo> media;
     bool is_outgoing;
@@ -137,7 +128,7 @@ struct ChatStatus {
 std::string chat_type_to_string(ChatType type);
 std::string media_type_to_string(MediaType type);
 MediaType detect_media_type(const std::string& filename, const std::string& mime_type);
-bool is_media_type(MediaType type);  // true for PHOTO, VIDEO, ANIMATION
+bool is_media_type(MediaType type);     // true for PHOTO, VIDEO, ANIMATION
 bool is_document_type(MediaType type);  // true for DOCUMENT, AUDIO, etc.
 
 }  // namespace tg

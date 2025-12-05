@@ -22,7 +22,7 @@ protected:
     }
 
     void TearDown() override {
-        cache_.reset();  // Close database
+        cache_.reset();             // Close database
         fs::remove(temp_db_path_);  // Clean up
     }
 

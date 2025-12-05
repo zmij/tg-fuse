@@ -18,7 +18,7 @@ public:
         std::string api_hash;
         std::string database_directory;
         std::string files_directory;
-        bool use_test_dc = false;           // Use test data center
+        bool use_test_dc = false;  // Use test data center
         bool use_file_database = true;
         bool use_chat_info_database = true;
         bool use_message_database = true;

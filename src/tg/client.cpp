@@ -222,12 +222,23 @@ public:
         // Send initial configuration
         send_query(
             td_api::make_object<td_api::setTdlibParameters>(
-                config_.use_test_dc, config_.database_directory, config_.files_directory,
-                "",    // database_encryption_key
-                config_.use_file_database, config_.use_chat_info_database, config_.use_message_database,
+                config_.use_test_dc,
+                config_.database_directory,
+                config_.files_directory,
+                "",  // database_encryption_key
+                config_.use_file_database,
+                config_.use_chat_info_database,
+                config_.use_message_database,
                 true,  // use_secret_chats
-                config_.api_id, config_.api_hash, "en", "Desktop", "", "1.0"),
-            [](auto response) { spdlog::debug("TDLib parameters set"); });
+                config_.api_id,
+                config_.api_hash,
+                "en",
+                "Desktop",
+                "",
+                "1.0"
+            ),
+            [](auto response) { spdlog::debug("TDLib parameters set"); }
+        );
     }
 
     void stop() {
@@ -413,18 +424,21 @@ public:
     }
 
     void send_phone_number(const std::string& phone) {
-        send_query(td_api::make_object<td_api::setAuthenticationPhoneNumber>(phone, nullptr),
-                   [](auto response) { spdlog::debug("Phone number sent"); });
+        send_query(td_api::make_object<td_api::setAuthenticationPhoneNumber>(phone, nullptr), [](auto response) {
+            spdlog::debug("Phone number sent");
+        });
     }
 
     void send_code(const std::string& code) {
-        send_query(td_api::make_object<td_api::checkAuthenticationCode>(code),
-                   [](auto response) { spdlog::debug("Code sent"); });
+        send_query(td_api::make_object<td_api::checkAuthenticationCode>(code), [](auto response) {
+            spdlog::debug("Code sent");
+        });
     }
 
     void send_password(const std::string& password) {
-        send_query(td_api::make_object<td_api::checkAuthenticationPassword>(password),
-                   [](auto response) { spdlog::debug("Password sent"); });
+        send_query(td_api::make_object<td_api::checkAuthenticationPassword>(password), [](auto response) {
+            spdlog::debug("Password sent");
+        });
     }
 
     // Get all chats
@@ -484,10 +498,15 @@ public:
     Message send_text_message_sync(int64_t chat_id, const std::string& text) {
         auto input_content = td_api::make_object<td_api::inputMessageText>(
             td_api::make_object<td_api::formattedText>(text, std::vector<td_api::object_ptr<td_api::textEntity>>()),
-            nullptr, true);
+            nullptr,
+            true
+        );
 
         auto response = send_query_sync(
-            td_api::make_object<td_api::sendMessage>(chat_id, nullptr, nullptr, nullptr, nullptr, std::move(input_content)));
+            td_api::make_object<td_api::sendMessage>(
+                chat_id, nullptr, nullptr, nullptr, nullptr, std::move(input_content)
+            )
+        );
 
         if (response->get_id() == td_api::message::ID) {
             auto msg_obj = td::move_tl_object_as<td_api::message>(response);
@@ -503,8 +522,7 @@ public:
     std::vector<Message> get_chat_history_sync(int64_t chat_id, int limit) {
         std::vector<Message> result;
 
-        auto response =
-            send_query_sync(td_api::make_object<td_api::getChatHistory>(chat_id, 0, 0, limit, false));
+        auto response = send_query_sync(td_api::make_object<td_api::getChatHistory>(chat_id, 0, 0, limit, false));
 
         if (response->get_id() == td_api::messages::ID) {
             auto messages_obj = td::move_tl_object_as<td_api::messages>(response);
@@ -529,26 +547,42 @@ public:
 
         td_api::object_ptr<td_api::InputMessageContent> input_content;
 
-        bool send_as_media = (mode == SendMode::MEDIA) ||
-                             (mode == SendMode::AUTO && is_media_type(detected_type));
+        bool send_as_media = (mode == SendMode::MEDIA) || (mode == SendMode::AUTO && is_media_type(detected_type));
 
         if (send_as_media && detected_type == MediaType::PHOTO) {
             auto input_file = td_api::make_object<td_api::inputFileLocal>(path);
             input_content = td_api::make_object<td_api::inputMessagePhoto>(
-                std::move(input_file), nullptr, std::vector<int32_t>(), 0, 0, nullptr, false, nullptr, false);
+                std::move(input_file), nullptr, std::vector<int32_t>(), 0, 0, nullptr, false, nullptr, false
+            );
         } else if (send_as_media && (detected_type == MediaType::VIDEO || detected_type == MediaType::ANIMATION)) {
             auto input_file = td_api::make_object<td_api::inputFileLocal>(path);
             input_content = td_api::make_object<td_api::inputMessageVideo>(
-                std::move(input_file), nullptr, nullptr, 0, std::vector<int32_t>(), 0, 0, 0, false, nullptr, false, nullptr, false);
+                std::move(input_file),
+                nullptr,
+                nullptr,
+                0,
+                std::vector<int32_t>(),
+                0,
+                0,
+                0,
+                false,
+                nullptr,
+                false,
+                nullptr,
+                false
+            );
         } else {
             // Send as document
             auto input_file = td_api::make_object<td_api::inputFileLocal>(path);
-            input_content = td_api::make_object<td_api::inputMessageDocument>(
-                std::move(input_file), nullptr, false, nullptr);
+            input_content =
+                td_api::make_object<td_api::inputMessageDocument>(std::move(input_file), nullptr, false, nullptr);
         }
 
-        auto response = send_query_sync(td_api::make_object<td_api::sendMessage>(
-            chat_id, nullptr, nullptr, nullptr, nullptr, std::move(input_content)));
+        auto response = send_query_sync(
+            td_api::make_object<td_api::sendMessage>(
+                chat_id, nullptr, nullptr, nullptr, nullptr, std::move(input_content)
+            )
+        );
 
         if (response->get_id() == td_api::message::ID) {
             auto msg_obj = td::move_tl_object_as<td_api::message>(response);
@@ -616,18 +650,12 @@ private:
         auto ext = fs::path(path).extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-        if (ext == ".jpg" || ext == ".jpeg")
-            return "image/jpeg";
-        if (ext == ".png")
-            return "image/png";
-        if (ext == ".gif")
-            return "image/gif";
-        if (ext == ".mp4")
-            return "video/mp4";
-        if (ext == ".mov")
-            return "video/quicktime";
-        if (ext == ".pdf")
-            return "application/pdf";
+        if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+        if (ext == ".png") return "image/png";
+        if (ext == ".gif") return "image/gif";
+        if (ext == ".mp4") return "video/mp4";
+        if (ext == ".mov") return "video/quicktime";
+        if (ext == ".pdf") return "application/pdf";
 
         return "application/octet-stream";
     }
@@ -669,9 +697,7 @@ Task<void> TelegramClient::stop() {
     co_return;
 }
 
-Task<AuthState> TelegramClient::get_auth_state() {
-    co_return impl_->get_auth_state();
-}
+Task<AuthState> TelegramClient::get_auth_state() { co_return impl_->get_auth_state(); }
 
 Task<void> TelegramClient::login(const std::string& phone) {
     impl_->send_phone_number(phone);
@@ -724,9 +750,7 @@ Task<std::vector<Chat>> TelegramClient::get_channels() {
     co_return channels;
 }
 
-Task<std::vector<Chat>> TelegramClient::get_all_chats() {
-    co_return impl_->get_all_chats_sync();
-}
+Task<std::vector<Chat>> TelegramClient::get_all_chats() { co_return impl_->get_all_chats_sync(); }
 
 Task<std::optional<Chat>> TelegramClient::resolve_username(const std::string& username) {
     // Remove @ or # prefix if present
@@ -738,9 +762,7 @@ Task<std::optional<Chat>> TelegramClient::resolve_username(const std::string& us
     co_return impl_->search_public_chat_sync(clean_username);
 }
 
-Task<std::optional<Chat>> TelegramClient::get_chat(int64_t chat_id) {
-    co_return impl_->get_chat_sync(chat_id);
-}
+Task<std::optional<Chat>> TelegramClient::get_chat(int64_t chat_id) { co_return impl_->get_chat_sync(chat_id); }
 
 Task<std::optional<User>> TelegramClient::get_user(int64_t user_id) {
     // TODO: Implement using getUser

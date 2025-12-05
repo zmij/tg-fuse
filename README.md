@@ -51,6 +51,13 @@ sudo dnf install fuse3-devel cmake gcc-c++ pkg-config
 # macOS
 brew install macfuse cmake
 
+# IMPORTANT: Ensure macFUSE is compatible with your macOS version.
+# If you see "Unsupported macOS Version" or "file system is not available" errors,
+# download the latest macFUSE from: https://github.com/osxfuse/osxfuse/releases/latest
+# After installation:
+#   1. Approve the system extension in System Settings → Privacy & Security
+#   2. Reboot if required
+
 # Clone and build
 git clone https://github.com/yourusername/tg-fuse
 cd tg-fuse
@@ -81,16 +88,32 @@ echo "Check this out" > /mnt/tg/@colleague/text
 
 ## How it works
 
-tg-fuse creates a virtual filesystem where each Telegram contact appears as a directory. File operations are translated into TDLib API calls, letting you use familiar Unix tools to interact with Telegram.
+tg-fuse creates a virtual filesystem where Telegram contacts, groups, and channels appear as directories. File operations are translated into TDLib API calls, letting you use familiar Unix tools to interact with Telegram.
 
 **Filesystem structure:**
 ```
 /mnt/tg/  (or /Volumes/tg on macOS)
-├── @username/          # Direct messages
-├── #groupname/         # Group chats
-├── -1001234567890/     # Channels/supergroups
-└── .meta/              # Control interface
+├── users/
+│   ├── alice/          # User directory
+│   │   └── .info       # User information (read-only)
+│   └── bob/
+│       └── .info
+├── groups/
+│   ├── family/         # Group directory
+│   │   └── .info       # Group information
+│   └── work/
+│       └── .info
+├── channels/
+│   ├── news_channel/   # Channel directory
+│   │   └── .info       # Channel information
+│   └── tech_updates/
+│       └── .info
+├── @alice -> users/alice   # Symlink for quick access
+├── @bob -> users/bob
+└── ...
 ```
+
+**Symlink convention:** `@<username>` at root resolves to `users/<username>` for convenient access.
 
 ## Platform Notes
 
