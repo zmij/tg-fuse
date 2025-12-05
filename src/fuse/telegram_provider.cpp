@@ -10,7 +10,8 @@
 
 namespace tgfuse {
 
-TelegramDataProvider::TelegramDataProvider(tg::TelegramClient& client) : client_(client), users_loaded_(false) {}
+TelegramDataProvider::TelegramDataProvider(tg::TelegramClient& client)
+    : client_(client), users_loaded_(false), groups_loaded_(false) {}
 
 void TelegramDataProvider::refresh_users() {
     try {
@@ -119,6 +120,72 @@ const tg::User* TelegramDataProvider::find_user_by_dir_name(const std::string& d
     return nullptr;
 }
 
+void TelegramDataProvider::refresh_groups() {
+    try {
+        auto groups_task = client_.get_groups();
+        auto groups_list = groups_task.get_result();
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        groups_.clear();
+
+        for (auto& group : groups_list) {
+            auto dir_name = get_group_dir_name(group);
+            groups_[dir_name] = std::move(group);
+        }
+
+        if (!groups_list.empty()) {
+            groups_loaded_ = true;
+        }
+        spdlog::info("Loaded {} groups from Telegram", groups_.size());
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to refresh groups: {}", e.what());
+    }
+}
+
+void TelegramDataProvider::ensure_groups_loaded() {
+    if (!groups_loaded_) {
+        refresh_groups();
+    }
+}
+
+std::string TelegramDataProvider::get_group_dir_name(const tg::Chat& chat) const {
+    // Prefer username, fallback to title (sanitised)
+    if (!chat.username.empty()) {
+        return chat.username;
+    }
+    if (!chat.title.empty()) {
+        return sanitise_for_path(chat.title);
+    }
+    return std::to_string(chat.id);
+}
+
+const tg::Chat* TelegramDataProvider::find_group_by_dir_name(const std::string& dir_name) const {
+    auto it = groups_.find(dir_name);
+    if (it != groups_.end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
+std::string TelegramDataProvider::generate_group_info(const tg::Chat& chat) const {
+    std::ostringstream oss;
+
+    // Title
+    if (!chat.title.empty()) {
+        oss << "Title: " << chat.title << "\n";
+    }
+
+    // Username
+    if (!chat.username.empty()) {
+        oss << "Username: @" << chat.username << "\n";
+    }
+
+    // Type
+    oss << "Type: " << (chat.type == tg::ChatType::SUPERGROUP ? "supergroup" : "group") << "\n";
+
+    return oss.str();
+}
+
 TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view path) const {
     PathInfo info;
 
@@ -176,6 +243,16 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
             info.category = PathCategory::CONTACT_SYMLINK;
             info.entity_name = components[1];
         }
+    } else if (components[0] == kGroupsDir) {
+        if (components.size() == 1) {
+            info.category = PathCategory::GROUPS_DIR;
+        } else if (components.size() == 2) {
+            info.category = PathCategory::GROUP_DIR;
+            info.entity_name = components[1];
+        } else if (components.size() == 3 && components[2] == kInfoFile) {
+            info.category = PathCategory::GROUP_INFO;
+            info.entity_name = components[1];
+        }
     }
 
     return info;
@@ -184,6 +261,7 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
 std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
     ensure_users_loaded();
     ensure_current_user_loaded();
+    ensure_groups_loaded();
 
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<Entry> entries;
@@ -195,6 +273,7 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
             // Top-level directories
             entries.push_back(Entry::directory(std::string(kUsersDir)));
             entries.push_back(Entry::directory(std::string(kContactsDir)));
+            entries.push_back(Entry::directory(std::string(kGroupsDir)));
             // Self symlink pointing to current user's directory
             if (current_user_) {
                 auto dir_name = get_user_dir_name(*current_user_);
@@ -248,6 +327,32 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
             break;
         }
 
+        case PathCategory::GROUPS_DIR:
+            for (const auto& [name, group] : groups_) {
+                auto entry = Entry::directory(name);
+                if (group.last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(group.last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                entries.push_back(std::move(entry));
+            }
+            break;
+
+        case PathCategory::GROUP_DIR: {
+            auto* group = find_group_by_dir_name(info.entity_name);
+            if (group) {
+                auto entry = Entry::file(".info", 4096);
+                if (group->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                entries.push_back(std::move(entry));
+            }
+            break;
+        }
+
         default:
             break;
     }
@@ -258,6 +363,7 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
 std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
     ensure_users_loaded();
     ensure_current_user_loaded();
+    ensure_groups_loaded();
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto info = parse_path(path);
@@ -271,6 +377,9 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
 
         case PathCategory::CONTACTS_DIR:
             return Entry::directory(std::string(kContactsDir));
+
+        case PathCategory::GROUPS_DIR:
+            return Entry::directory(std::string(kGroupsDir));
 
         case PathCategory::USER_DIR: {
             auto* user = find_user_by_dir_name(info.entity_name);
@@ -294,6 +403,34 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
                 auto entry = Entry::file(std::string(kInfoFile), 4096);
                 if (user->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                return entry;
+            }
+            break;
+        }
+
+        case PathCategory::GROUP_DIR: {
+            auto* group = find_group_by_dir_name(info.entity_name);
+            if (group) {
+                auto entry = Entry::directory(info.entity_name);
+                if (group->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                return entry;
+            }
+            break;
+        }
+
+        case PathCategory::GROUP_INFO: {
+            auto* group = find_group_by_dir_name(info.entity_name);
+            if (group) {
+                auto entry = Entry::file(".info", 4096);
+                if (group->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
                     entry.atime = entry.mtime;
                     entry.ctime = entry.mtime;
                 }
@@ -417,6 +554,13 @@ FileContent TelegramDataProvider::read_file(std::string_view path) {
             }
 
             content.data = generate_user_info(user_copy);
+            content.readable = true;
+        }
+    } else if (info.category == PathCategory::GROUP_INFO) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto* group = find_group_by_dir_name(info.entity_name);
+        if (group) {
+            content.data = generate_group_info(*group);
             content.readable = true;
         }
     }
