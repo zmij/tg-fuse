@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <string>
@@ -39,14 +40,14 @@ public:
 private:
     /// Path category enumeration
     enum class PathCategory {
+        NOT_FOUND,  // Default value - path not recognised
         ROOT,
         USERS_DIR,        // /users
         CONTACTS_DIR,     // /contacts
         USER_DIR,         // /users/alice
         USER_INFO,        // /users/alice/.info
         CONTACT_SYMLINK,  // /contacts/alice
-        ROOT_SYMLINK,     // /@alice
-        NOT_FOUND
+        ROOT_SYMLINK      // /@alice
     };
 
     /// Parsed path information
@@ -74,7 +75,7 @@ private:
     [[nodiscard]] bool has_username(const tg::User& user) const { return !user.username.empty(); }
 
     /// Sanitise a string for use as a filesystem path component
-    [[nodiscard]] std::string sanitise_for_path(const std::string& name) const;
+    [[nodiscard]] std::filesystem::path sanitise_for_path(const std::string& name) const;
 
     /// Build symlink target path (absolute if mount point is set)
     [[nodiscard]] std::string make_symlink_target(const std::string& relative_path) const;
@@ -86,7 +87,7 @@ private:
 
     // Cached user data (keyed by directory name)
     std::map<std::string, tg::User> users_;
-    std::atomic<bool> users_loaded_;
+    mutable std::atomic<bool> users_loaded_;  // mutable for const-correctness with lazy loading
     mutable std::mutex mutex_;
 };
 

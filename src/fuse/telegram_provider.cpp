@@ -1,8 +1,11 @@
 #include "fuse/telegram_provider.hpp"
 
+#include "fuse/constants.hpp"
+
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <sstream>
 
 namespace tgfuse {
@@ -11,9 +14,11 @@ TelegramDataProvider::TelegramDataProvider(tg::TelegramClient& client) : client_
 
 void TelegramDataProvider::refresh_users() {
     try {
+        // TDLib tasks are thread-safe; get_result() blocks until completion
         auto users_task = client_.get_users();
         auto users_list = users_task.get_result();
 
+        // Mutex protects the users_ map during modification
         std::lock_guard<std::mutex> lock(mutex_);
         users_.clear();
 
@@ -35,12 +40,15 @@ void TelegramDataProvider::refresh_users() {
 }
 
 void TelegramDataProvider::ensure_users_loaded() {
+    // users_loaded_ is std::atomic<bool>, so this check is thread-safe.
+    // Multiple threads may enter refresh_users() concurrently on first access,
+    // but the mutex inside refresh_users() ensures only one actually populates the cache.
     if (!users_loaded_) {
         refresh_users();
     }
 }
 
-std::string TelegramDataProvider::sanitise_for_path(const std::string& name) const {
+std::filesystem::path TelegramDataProvider::sanitise_for_path(const std::string& name) const {
     std::string result;
     result.reserve(name.size());
 
@@ -58,7 +66,7 @@ std::string TelegramDataProvider::sanitise_for_path(const std::string& name) con
         result.pop_back();
     }
 
-    return result.empty() ? "_" : result;
+    return std::filesystem::path(result.empty() ? "_" : result);
 }
 
 std::string TelegramDataProvider::get_user_dir_name(const tg::User& user) const {
@@ -68,7 +76,7 @@ std::string TelegramDataProvider::get_user_dir_name(const tg::User& user) const 
     }
     auto name = user.display_name();
     if (!name.empty()) {
-        return sanitise_for_path(name);
+        return sanitise_for_path(name).string();
     }
     return std::to_string(user.id);
 }
@@ -77,11 +85,9 @@ std::string TelegramDataProvider::make_symlink_target(const std::string& relativ
     if (mount_point_.empty()) {
         return relative_path;
     }
-    // Build absolute path: mount_point + "/" + relative_path
-    if (mount_point_.back() == '/') {
-        return mount_point_ + relative_path;
-    }
-    return mount_point_ + "/" + relative_path;
+    // Use std::filesystem::path for proper path concatenation
+    std::filesystem::path base(mount_point_);
+    return (base / relative_path).string();
 }
 
 const tg::User* TelegramDataProvider::find_user_by_dir_name(const std::string& dir_name) const {
@@ -95,31 +101,22 @@ const tg::User* TelegramDataProvider::find_user_by_dir_name(const std::string& d
 TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view path) const {
     PathInfo info;
 
-    // Normalise path (remove trailing slash)
-    if (path.size() > 1 && path.back() == '/') {
-        path = path.substr(0, path.size() - 1);
-    }
-
     if (path.empty() || path == "/") {
         info.category = PathCategory::ROOT;
         return info;
     }
 
-    // Split path into components
+    // Use std::filesystem::path for normalisation and component parsing
+    std::filesystem::path fs_path(path);
+    fs_path = fs_path.lexically_normal();
+
+    // Collect path components (skip root)
     std::vector<std::string> components;
-    std::string current;
-    for (char c : path) {
-        if (c == '/') {
-            if (!current.empty()) {
-                components.push_back(std::move(current));
-                current.clear();
-            }
-        } else {
-            current += c;
+    for (const auto& component : fs_path) {
+        auto str = component.string();
+        if (str != "/" && !str.empty()) {
+            components.push_back(str);
         }
-    }
-    if (!current.empty()) {
-        components.push_back(std::move(current));
     }
 
     if (components.empty()) {
@@ -135,17 +132,17 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
     }
 
     // Check for top-level directories
-    if (components[0] == "users") {
+    if (components[0] == kUsersDir) {
         if (components.size() == 1) {
             info.category = PathCategory::USERS_DIR;
         } else if (components.size() == 2) {
             info.category = PathCategory::USER_DIR;
             info.entity_name = components[1];
-        } else if (components.size() == 3 && components[2] == ".info") {
+        } else if (components.size() == 3 && components[2] == kInfoFile) {
             info.category = PathCategory::USER_INFO;
             info.entity_name = components[1];
         }
-    } else if (components[0] == "contacts") {
+    } else if (components[0] == kContactsDir) {
         if (components.size() == 1) {
             info.category = PathCategory::CONTACTS_DIR;
         } else if (components.size() == 2) {
@@ -168,12 +165,13 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
     switch (info.category) {
         case PathCategory::ROOT:
             // Top-level directories
-            entries.push_back(Entry::directory("users"));
-            entries.push_back(Entry::directory("contacts"));
+            entries.push_back(Entry::directory(std::string(kUsersDir)));
+            entries.push_back(Entry::directory(std::string(kContactsDir)));
             // User symlinks at root (contacts with usernames only)
             for (const auto& [name, user] : users_) {
                 if (is_user_contact(user) && has_username(user)) {
-                    entries.push_back(Entry::symlink("@" + user.username, make_symlink_target("users/" + name)));
+                    auto target = (std::filesystem::path(kUsersDir) / name).string();
+                    entries.push_back(Entry::symlink("@" + user.username, make_symlink_target(target)));
                 }
             }
             break;
@@ -195,7 +193,8 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
             // Symlinks to users directory for contacts only
             for (const auto& [name, user] : users_) {
                 if (is_user_contact(user)) {
-                    entries.push_back(Entry::symlink(name, make_symlink_target("users/" + name)));
+                    auto target = (std::filesystem::path(kUsersDir) / name).string();
+                    entries.push_back(Entry::symlink(name, make_symlink_target(target)));
                 }
             }
             break;
@@ -204,7 +203,7 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
             auto* user = find_user_by_dir_name(info.entity_name);
             if (user) {
                 // Use a large fixed size since content is generated dynamically
-                auto entry = Entry::file(".info", 4096);
+                auto entry = Entry::file(std::string(kInfoFile), 4096);
                 if (user->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
                     entry.atime = entry.mtime;
@@ -233,10 +232,10 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
             return Entry::directory("");
 
         case PathCategory::USERS_DIR:
-            return Entry::directory("users");
+            return Entry::directory(std::string(kUsersDir));
 
         case PathCategory::CONTACTS_DIR:
-            return Entry::directory("contacts");
+            return Entry::directory(std::string(kContactsDir));
 
         case PathCategory::USER_DIR: {
             auto* user = find_user_by_dir_name(info.entity_name);
@@ -257,7 +256,7 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
             if (user) {
                 // Use a large fixed size since content is generated dynamically
                 // (bio and other fields are fetched lazily in read_file)
-                auto entry = Entry::file(".info", 4096);
+                auto entry = Entry::file(std::string(kInfoFile), 4096);
                 if (user->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
                     entry.atime = entry.mtime;
@@ -271,7 +270,8 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
         case PathCategory::CONTACT_SYMLINK: {
             auto* user = find_user_by_dir_name(info.entity_name);
             if (user && is_user_contact(*user)) {
-                return Entry::symlink(info.entity_name, make_symlink_target("users/" + info.entity_name));
+                auto target = (std::filesystem::path(kUsersDir) / info.entity_name).string();
+                return Entry::symlink(info.entity_name, make_symlink_target(target));
             }
             break;
         }
@@ -282,7 +282,8 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
             // Find user by username, not by dir_name
             for (const auto& [dir_name, user] : users_) {
                 if (user.username == info.entity_name && is_user_contact(user)) {
-                    return Entry::symlink("@" + user.username, make_symlink_target("users/" + dir_name));
+                    auto target = (std::filesystem::path(kUsersDir) / dir_name).string();
+                    return Entry::symlink("@" + user.username, make_symlink_target(target));
                 }
             }
             break;
@@ -387,13 +388,15 @@ std::string TelegramDataProvider::read_link(std::string_view path) {
         // Find user by username
         for (const auto& [dir_name, user] : users_) {
             if (user.username == info.entity_name && is_user_contact(user)) {
-                return make_symlink_target("users/" + dir_name);
+                auto target = (std::filesystem::path(kUsersDir) / dir_name).string();
+                return make_symlink_target(target);
             }
         }
     } else if (info.category == PathCategory::CONTACT_SYMLINK) {
         auto* user = find_user_by_dir_name(info.entity_name);
         if (user && is_user_contact(*user)) {
-            return make_symlink_target("users/" + info.entity_name);
+            auto target = (std::filesystem::path(kUsersDir) / info.entity_name).string();
+            return make_symlink_target(target);
         }
     }
 
