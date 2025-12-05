@@ -65,20 +65,16 @@ public:
 
 class ChatNotFoundException : public EntityException {
 public:
-    explicit ChatNotFoundException(int64_t chat_id)
-        : EntityException("Chat not found: " + std::to_string(chat_id)) {}
+    explicit ChatNotFoundException(int64_t chat_id) : EntityException("Chat not found: " + std::to_string(chat_id)) {}
 
-    explicit ChatNotFoundException(const std::string& username)
-        : EntityException("Chat not found: " + username) {}
+    explicit ChatNotFoundException(const std::string& username) : EntityException("Chat not found: " + username) {}
 };
 
 class UserNotFoundException : public EntityException {
 public:
-    explicit UserNotFoundException(int64_t user_id)
-        : EntityException("User not found: " + std::to_string(user_id)) {}
+    explicit UserNotFoundException(int64_t user_id) : EntityException("User not found: " + std::to_string(user_id)) {}
 
-    explicit UserNotFoundException(const std::string& username)
-        : EntityException("User not found: " + username) {}
+    explicit UserNotFoundException(const std::string& username) : EntityException("User not found: " + username) {}
 };
 
 class MessageNotFoundException : public EntityException {
@@ -95,20 +91,17 @@ public:
 
 class FileNotFoundException : public FileException {
 public:
-    explicit FileNotFoundException(const std::string& file_id)
-        : FileException("File not found: " + file_id) {}
+    explicit FileNotFoundException(const std::string& file_id) : FileException("File not found: " + file_id) {}
 };
 
 class FileDownloadException : public FileException {
 public:
-    explicit FileDownloadException(const std::string& file_id)
-        : FileException("Failed to download file: " + file_id) {}
+    explicit FileDownloadException(const std::string& file_id) : FileException("Failed to download file: " + file_id) {}
 };
 
 class FileUploadException : public FileException {
 public:
-    explicit FileUploadException(const std::string& path)
-        : FileException("Failed to upload file: " + path) {}
+    explicit FileUploadException(const std::string& path) : FileException("Failed to upload file: " + path) {}
 };
 
 // Operation-related exceptions
@@ -126,10 +119,10 @@ public:
 class RateLimitException : public OperationException {
 public:
     explicit RateLimitException(int retry_after_seconds = 0)
-        : OperationException("Rate limit exceeded" +
-                             (retry_after_seconds > 0 ? ", retry after " + std::to_string(retry_after_seconds) +
-                                                             " seconds"
-                                                      : "")) {}
+        : OperationException(
+              "Rate limit exceeded" +
+              (retry_after_seconds > 0 ? ", retry after " + std::to_string(retry_after_seconds) + " seconds" : "")
+          ) {}
 };
 
 // Cache-related exceptions

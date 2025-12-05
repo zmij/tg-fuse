@@ -2,8 +2,8 @@
 
 #include "tg/exceptions.hpp"
 
-#include <sqlite3.h>
 #include <spdlog/spdlog.h>
+#include <sqlite3.h>
 
 namespace tg {
 
@@ -21,24 +21,16 @@ void exec_sql(sqlite3* db, const char* sql) {
 }
 
 // Helper to convert ChatType enum to int
-int chat_type_to_int(ChatType type) {
-    return static_cast<int>(type);
-}
+int chat_type_to_int(ChatType type) { return static_cast<int>(type); }
 
 // Helper to convert int to ChatType
-ChatType int_to_chat_type(int value) {
-    return static_cast<ChatType>(value);
-}
+ChatType int_to_chat_type(int value) { return static_cast<ChatType>(value); }
 
 // Helper to convert MediaType enum to int
-int media_type_to_int(MediaType type) {
-    return static_cast<int>(type);
-}
+int media_type_to_int(MediaType type) { return static_cast<int>(type); }
 
 // Helper to convert int to MediaType
-MediaType int_to_media_type(int value) {
-    return static_cast<MediaType>(value);
-}
+MediaType int_to_media_type(int value) { return static_cast<MediaType>(value); }
 
 }  // namespace
 

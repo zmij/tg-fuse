@@ -9,9 +9,7 @@ namespace tg {
 namespace {
 
 // Simple coroutine that returns a value
-Task<int> simple_coroutine() {
-    co_return 42;
-}
+Task<int> simple_coroutine() { co_return 42; }
 
 // Coroutine that co_awaits another
 Task<int> nested_coroutine() {
@@ -20,9 +18,7 @@ Task<int> nested_coroutine() {
 }
 
 // Coroutine with void return
-Task<void> void_coroutine() {
-    co_return;
-}
+Task<void> void_coroutine() { co_return; }
 
 // Coroutine that throws
 Task<int> throwing_coroutine() {
@@ -110,9 +106,7 @@ TEST(AsyncTest, TdPromiseVoid) {
 }
 
 // Test chaining multiple coroutines
-Task<int> chain_step1() {
-    co_return 10;
-}
+Task<int> chain_step1() { co_return 10; }
 
 Task<int> chain_step2(int value) {
     auto result = co_await chain_step1();
@@ -170,9 +164,7 @@ TEST(AsyncTest, TaskMoveSemantics) {
 }
 
 // Stress test with many coroutines (TDLib pattern)
-Task<int> stress_coroutine(int value) {
-    co_return value * 2;
-}
+Task<int> stress_coroutine(int value) { co_return value * 2; }
 
 TEST(AsyncTest, StressTestManyCoroutines) {
     const int num_coroutines = 1000;
