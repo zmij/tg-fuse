@@ -203,8 +203,8 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
         case PathCategory::USER_DIR: {
             auto* user = find_user_by_dir_name(info.entity_name);
             if (user) {
-                auto content = generate_user_info(*user);
-                auto entry = Entry::file(".info", content.size());
+                // Use a large fixed size since content is generated dynamically
+                auto entry = Entry::file(".info", 4096);
                 if (user->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
                     entry.atime = entry.mtime;
@@ -255,8 +255,9 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
         case PathCategory::USER_INFO: {
             auto* user = find_user_by_dir_name(info.entity_name);
             if (user) {
-                auto content = generate_user_info(*user);
-                auto entry = Entry::file(".info", content.size());
+                // Use a large fixed size since content is generated dynamically
+                // (bio and other fields are fetched lazily in read_file)
+                auto entry = Entry::file(".info", 4096);
                 if (user->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
                     entry.atime = entry.mtime;
