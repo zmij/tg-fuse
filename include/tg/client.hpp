@@ -55,6 +55,7 @@ public:
     Task<std::optional<Chat>> resolve_username(const std::string& username);
     Task<std::optional<Chat>> get_chat(int64_t chat_id);
     Task<std::optional<User>> get_user(int64_t user_id);
+    Task<User> get_me();  // Get the current logged-in user
 
     // Messaging
     Task<Message> send_text(int64_t chat_id, const std::string& text);

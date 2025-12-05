@@ -662,6 +662,18 @@ public:
         throw FileUploadException(path);
     }
 
+    // Get the current logged-in user
+    User get_me_sync() {
+        auto response = send_query_sync(td_api::make_object<td_api::getMe>());
+
+        if (response->get_id() != td_api::user::ID) {
+            throw TelegramException("Failed to get current user");
+        }
+
+        auto user_obj = td::move_tl_object_as<td_api::user>(response);
+        return convert_user(*user_obj);
+    }
+
     // Get user by ID
     std::optional<User> get_user_sync(int64_t user_id) {
         auto response = send_query_sync(td_api::make_object<td_api::getUser>(user_id));
@@ -929,6 +941,8 @@ Task<std::optional<Chat>> TelegramClient::resolve_username(const std::string& us
 Task<std::optional<Chat>> TelegramClient::get_chat(int64_t chat_id) { co_return impl_->get_chat_sync(chat_id); }
 
 Task<std::optional<User>> TelegramClient::get_user(int64_t user_id) { co_return impl_->get_user_sync(user_id); }
+
+Task<User> TelegramClient::get_me() { co_return impl_->get_me_sync(); }
 
 Task<Message> TelegramClient::send_text(int64_t chat_id, const std::string& text) {
     co_return impl_->send_text_message_sync(chat_id, text);

@@ -47,7 +47,8 @@ private:
         USER_DIR,         // /users/alice
         USER_INFO,        // /users/alice/.info
         CONTACT_SYMLINK,  // /contacts/alice
-        ROOT_SYMLINK      // /@alice
+        ROOT_SYMLINK,     // /@alice
+        SELF_SYMLINK      // /self
     };
 
     /// Parsed path information
@@ -83,11 +84,15 @@ private:
     /// Ensure users are loaded (lazy loading)
     void ensure_users_loaded();
 
+    /// Ensure current user is loaded (lazy loading)
+    void ensure_current_user_loaded();
+
     tg::TelegramClient& client_;
 
     // Cached user data (keyed by directory name)
     std::map<std::string, tg::User> users_;
-    mutable std::atomic<bool> users_loaded_;  // mutable for const-correctness with lazy loading
+    mutable std::atomic<bool> users_loaded_;        // mutable for const-correctness with lazy loading
+    mutable std::optional<tg::User> current_user_;  // Cached current user for /self symlink
     mutable std::mutex mutex_;
 };
 

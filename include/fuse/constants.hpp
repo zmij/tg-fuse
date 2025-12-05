@@ -8,5 +8,6 @@ namespace tgfuse {
 inline constexpr std::string_view kUsersDir = "users";
 inline constexpr std::string_view kContactsDir = "contacts";
 inline constexpr std::string_view kInfoFile = ".info";
+inline constexpr std::string_view kSelfSymlink = "self";
 
 }  // namespace tgfuse

@@ -48,6 +48,27 @@ void TelegramDataProvider::ensure_users_loaded() {
     }
 }
 
+void TelegramDataProvider::ensure_current_user_loaded() {
+    // Check without lock first for performance
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (current_user_.has_value()) {
+            return;
+        }
+    }
+
+    try {
+        auto me_task = client_.get_me();
+        auto me = me_task.get_result();
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        current_user_ = std::move(me);
+        spdlog::debug("Loaded current user: {}", current_user_->display_name());
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get current user: {}", e.what());
+    }
+}
+
 std::filesystem::path TelegramDataProvider::sanitise_for_path(const std::string& name) const {
     std::string result;
     result.reserve(name.size());
@@ -131,6 +152,12 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
         return info;
     }
 
+    // Check for /self symlink
+    if (components.size() == 1 && components[0] == kSelfSymlink) {
+        info.category = PathCategory::SELF_SYMLINK;
+        return info;
+    }
+
     // Check for top-level directories
     if (components[0] == kUsersDir) {
         if (components.size() == 1) {
@@ -156,6 +183,7 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
 
 std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
     ensure_users_loaded();
+    ensure_current_user_loaded();
 
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<Entry> entries;
@@ -167,6 +195,12 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
             // Top-level directories
             entries.push_back(Entry::directory(std::string(kUsersDir)));
             entries.push_back(Entry::directory(std::string(kContactsDir)));
+            // Self symlink pointing to current user's directory
+            if (current_user_) {
+                auto dir_name = get_user_dir_name(*current_user_);
+                auto target = (std::filesystem::path(kUsersDir) / dir_name).string();
+                entries.push_back(Entry::symlink(std::string(kSelfSymlink), make_symlink_target(target)));
+            }
             // User symlinks at root (contacts with usernames only)
             for (const auto& [name, user] : users_) {
                 if (is_user_contact(user) && has_username(user)) {
@@ -223,6 +257,7 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
 
 std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
     ensure_users_loaded();
+    ensure_current_user_loaded();
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto info = parse_path(path);
@@ -285,6 +320,15 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
                     auto target = (std::filesystem::path(kUsersDir) / dir_name).string();
                     return Entry::symlink("@" + user.username, make_symlink_target(target));
                 }
+            }
+            break;
+        }
+
+        case PathCategory::SELF_SYMLINK: {
+            if (current_user_) {
+                auto dir_name = get_user_dir_name(*current_user_);
+                auto target = (std::filesystem::path(kUsersDir) / dir_name).string();
+                return Entry::symlink(std::string(kSelfSymlink), make_symlink_target(target));
             }
             break;
         }
@@ -381,6 +425,8 @@ FileContent TelegramDataProvider::read_file(std::string_view path) {
 }
 
 std::string TelegramDataProvider::read_link(std::string_view path) {
+    ensure_current_user_loaded();
+
     std::lock_guard<std::mutex> lock(mutex_);
     auto info = parse_path(path);
 
@@ -396,6 +442,12 @@ std::string TelegramDataProvider::read_link(std::string_view path) {
         auto* user = find_user_by_dir_name(info.entity_name);
         if (user && is_user_contact(*user)) {
             auto target = (std::filesystem::path(kUsersDir) / info.entity_name).string();
+            return make_symlink_target(target);
+        }
+    } else if (info.category == PathCategory::SELF_SYMLINK) {
+        if (current_user_) {
+            auto dir_name = get_user_dir_name(*current_user_);
+            auto target = (std::filesystem::path(kUsersDir) / dir_name).string();
             return make_symlink_target(target);
         }
     }
