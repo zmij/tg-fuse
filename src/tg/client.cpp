@@ -415,6 +415,14 @@ public:
                 auto message = convert_message(*message_update->message_);
                 cache_->cache_message(message);
                 spdlog::debug("updateNewMessage: id={} chat={}", message.id, message.chat_id);
+
+                // Notify callback if set
+                {
+                    std::lock_guard<std::mutex> lock(message_callback_mutex_);
+                    if (message_callback_) {
+                        message_callback_(message);
+                    }
+                }
                 break;
             }
 
@@ -856,6 +864,16 @@ private:
     // Authorization synchronisation
     mutable std::mutex auth_mutex_;
     std::condition_variable auth_cv_;
+
+    // Message callback
+    std::function<void(const Message&)> message_callback_;
+    std::mutex message_callback_mutex_;
+
+public:
+    void set_message_callback(std::function<void(const Message&)> callback) {
+        std::lock_guard<std::mutex> lock(message_callback_mutex_);
+        message_callback_ = std::move(callback);
+    }
 };
 
 // TelegramClient implementation
@@ -1022,5 +1040,9 @@ Task<ChatStatus> TelegramClient::get_chat_status(int64_t chat_id) {
 }
 
 Task<std::string> TelegramClient::get_user_bio(int64_t user_id) { co_return impl_->get_user_bio_sync(user_id); }
+
+void TelegramClient::set_message_callback(MessageCallback callback) {
+    impl_->set_message_callback(std::move(callback));
+}
 
 }  // namespace tg
