@@ -45,10 +45,13 @@ private:
         USERS_DIR,        // /users
         CONTACTS_DIR,     // /contacts
         GROUPS_DIR,       // /groups
+        CHANNELS_DIR,     // /channels
         USER_DIR,         // /users/alice
         USER_INFO,        // /users/alice/.info
         GROUP_DIR,        // /groups/dev_chat
         GROUP_INFO,       // /groups/dev_chat/.info
+        CHANNEL_DIR,      // /channels/news
+        CHANNEL_INFO,     // /channels/news/.info
         CONTACT_SYMLINK,  // /contacts/alice
         ROOT_SYMLINK,     // /@alice
         SELF_SYMLINK      // /self
@@ -105,6 +108,21 @@ private:
     /// Generate info content for a group
     [[nodiscard]] std::string generate_group_info(const tg::Chat& chat) const;
 
+    /// Refresh channel cache from Telegram
+    void refresh_channels();
+
+    /// Ensure channels are loaded (lazy loading)
+    void ensure_channels_loaded();
+
+    /// Get directory name for a channel (username or sanitised title)
+    [[nodiscard]] std::string get_channel_dir_name(const tg::Chat& chat) const;
+
+    /// Find channel by directory name
+    [[nodiscard]] const tg::Chat* find_channel_by_dir_name(const std::string& dir_name) const;
+
+    /// Generate info content for a channel
+    [[nodiscard]] std::string generate_channel_info(const tg::Chat& chat) const;
+
     tg::TelegramClient& client_;
 
     // Cached user data (keyed by directory name)
@@ -115,6 +133,10 @@ private:
     // Cached group data (keyed by directory name)
     std::map<std::string, tg::Chat> groups_;
     mutable std::atomic<bool> groups_loaded_;
+
+    // Cached channel data (keyed by directory name)
+    std::map<std::string, tg::Chat> channels_;
+    std::atomic<bool> channels_loaded_;
 
     mutable std::mutex mutex_;
 };
