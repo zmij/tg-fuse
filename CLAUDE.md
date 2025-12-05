@@ -40,6 +40,9 @@ sudo make install
 ### Running the executable
 
 ```bash
+# Configure API credentials (one-time, get from https://my.telegram.org/apps)
+tg-fuse config set --api-id=YOUR_API_ID --api-hash=YOUR_API_HASH
+
 # Authenticate
 tg-fuse login
 

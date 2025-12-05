@@ -211,6 +211,9 @@ public:
             return;
         }
 
+        // Configure TDLib logging before creating the client
+        configure_tdlib_logging();
+
         running_ = true;
         client_id_ = td::ClientManager::get_manager_singleton()->create_client_id();
 
@@ -247,13 +250,19 @@ public:
         }
 
         spdlog::info("Stopping TelegramClient");
+
+        // Send close request first, while update thread is still running
+        td::ClientManager::get_manager_singleton()->send(client_id_, 0, td_api::make_object<td_api::close>());
+
+        // Give TDLib a moment to process the close
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // Now stop the update thread
         running_ = false;
 
         if (update_thread_.joinable()) {
             update_thread_.join();
         }
-
-        td::ClientManager::get_manager_singleton()->send(client_id_, 0, td_api::make_object<td_api::close>());
     }
 
     // Send a query to TDLib and register a callback
@@ -646,6 +655,32 @@ public:
     }
 
 private:
+    void configure_tdlib_logging() {
+        // Set log verbosity level
+        td::ClientManager::execute(td_api::make_object<td_api::setLogVerbosityLevel>(config_.log_verbosity));
+
+        // Configure log stream
+        if (!config_.logs_directory.empty()) {
+            fs::create_directories(config_.logs_directory);
+            auto log_path = (fs::path(config_.logs_directory) / "tdlib.log").string();
+
+            auto result = td::ClientManager::execute(
+                td_api::make_object<td_api::setLogStream>(td_api::make_object<td_api::logStreamFile>(
+                    log_path,
+                    50 * 1024 * 1024,  // 50 MB max file size
+                    false              // Don't redirect stderr
+                ))
+            );
+
+            if (result->get_id() == td_api::ok::ID) {
+                spdlog::info("TDLib logs redirected to: {}", log_path);
+            } else if (result->get_id() == td_api::error::ID) {
+                auto& error = static_cast<td_api::error&>(*result);
+                spdlog::warn("Failed to redirect TDLib logs: {}", error.message_);
+            }
+        }
+    }
+
     std::string detect_mime_type(const std::string& path) {
         auto ext = fs::path(path).extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
