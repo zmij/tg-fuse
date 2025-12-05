@@ -78,13 +78,45 @@ The codebase uses conditional compilation for FUSE headers:
 
 ## Architecture
 
-The application translates filesystem operations into TDLib API calls:
-- File operations (`cp`, `mv`, `rsync`) → Telegram file uploads
-- Directory structure represents chat hierarchy:
-  - `@username/` - Direct messages
-  - `#groupname/` - Group chats
-  - `-1001234567890/` - Channels/supergroups (by ID)
-  - `.meta/` - Control interface
+### Executables
+
+The project builds two executables:
+- **`tg-fuse`** - CLI companion app with subcommands (mount, login, etc.)
+- **`tg-fused`** - FUSE daemon that runs the filesystem
+
+Flow: `tg-fuse mount /path` → exec() into `tg-fused` → daemonise → FUSE loop
+
+### Directory Structure
+
+```
+/mount_point/
+├── users/
+│   └── <username>/
+│       └── .info           # User information (read-only)
+├── groups/
+│   └── <groupname>/
+│       └── .info           # Group information
+├── channels/
+│   └── <channelname>/
+│       └── .info           # Channel information
+├── @alice -> users/alice   # Symlinks for quick access
+└── ...
+```
+
+### Source Layout
+
+- `src/ctl/` - CLI companion app
+- `src/fused/` - FUSE daemon
+- `src/fuse/` - FUSE library (operations, platform abstraction, VFS)
+- `src/tg/` - Telegram wrapper library
+- `include/fuse/` - FUSE library headers
+- `include/tg/` - Telegram library headers
+
+### Platform Abstraction
+
+Cross-platform FUSE support is abstracted behind C++ interfaces in `include/fuse/platform.hpp`:
+- `FuseOperations` - Abstract interface for filesystem operations
+- `PlatformAdapter` - Bridges platform-specific FUSE callbacks to the abstract interface
 
 Uses C++20 features with TDLib's asynchronous API and C++ coroutines for handling Telegram operations.
 
