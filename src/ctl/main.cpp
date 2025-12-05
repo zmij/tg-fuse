@@ -1,3 +1,6 @@
+#include "config.hpp"
+#include "login.hpp"
+
 #include <spdlog/spdlog.h>
 #include <CLI/CLI.hpp>
 
@@ -89,42 +92,41 @@ int main(int argc, char* argv[]) {
     CLI::App app{"tg-fuse - Telegram FUSE filesystem control"};
     app.require_subcommand(1);
 
+    int verbosity = 0;
+    app.add_flag("-v,--verbose", verbosity, "Increase verbosity (-v, -vv, -vvv)");
+
     // Mount subcommand
     auto* mount_cmd = app.add_subcommand("mount", "Mount the Telegram filesystem");
 
     std::string mount_point;
     bool foreground = false;
-    int verbosity = 0;
     bool mock_mode = false;
     bool allow_other = false;
 
     mount_cmd->add_option("mount_point", mount_point, "Mount point for the filesystem")->required();
-
     mount_cmd->add_flag("-f,--foreground", foreground, "Run in foreground (don't daemonise)");
-    mount_cmd->add_flag("-v,--verbose", verbosity, "Increase verbosity (-v, -vv, -vvv)");
     mount_cmd->add_flag("--mock", mock_mode, "Use mock data (no Telegram connection)");
     mount_cmd->add_flag("--allow-other", allow_other, "Allow other users to access the mount");
 
-    // Login subcommand (placeholder for future)
-    auto* login_cmd = app.add_subcommand("login", "Authenticate with Telegram");
-    login_cmd->callback([]() {
-        spdlog::info("Login command not yet implemented");
-        std::cout << "Login command not yet implemented\n";
-    });
+    // Login subcommand
+    app.add_subcommand("login", "Authenticate with Telegram");
 
-    // Logout subcommand (placeholder for future)
-    auto* logout_cmd = app.add_subcommand("logout", "Log out from Telegram");
-    logout_cmd->callback([]() {
-        spdlog::info("Logout command not yet implemented");
-        std::cout << "Logout command not yet implemented\n";
-    });
+    // Logout subcommand
+    app.add_subcommand("logout", "Log out from Telegram");
 
-    // Status subcommand (placeholder for future)
-    auto* status_cmd = app.add_subcommand("status", "Show connection status");
-    status_cmd->callback([]() {
-        spdlog::info("Status command not yet implemented");
-        std::cout << "Status command not yet implemented\n";
-    });
+    // Status subcommand
+    app.add_subcommand("status", "Show authentication status");
+
+    // Config subcommand with nested subcommands
+    auto* config_cmd = app.add_subcommand("config", "Manage configuration");
+    config_cmd->require_subcommand(1);
+
+    // config set
+    auto* config_set_cmd = config_cmd->add_subcommand("set", "Set API credentials");
+    int32_t api_id = 0;
+    std::string api_hash;
+    config_set_cmd->add_option("--api-id", api_id, "Telegram API ID")->required();
+    config_set_cmd->add_option("--api-hash", api_hash, "Telegram API hash")->required();
 
     CLI11_PARSE(app, argc, argv);
 
@@ -137,9 +139,25 @@ int main(int argc, char* argv[]) {
         spdlog::set_level(spdlog::level::info);
     }
 
-    // Handle mount command
+    // Handle subcommands
     if (mount_cmd->parsed()) {
         return exec_mount(argv[0], mount_point, foreground, verbosity, mock_mode, allow_other);
+    }
+
+    if (app.got_subcommand("login")) {
+        return tgfuse::ctl::exec_login();
+    }
+
+    if (app.got_subcommand("logout")) {
+        return tgfuse::ctl::exec_logout();
+    }
+
+    if (app.got_subcommand("status")) {
+        return tgfuse::ctl::exec_status();
+    }
+
+    if (config_set_cmd->parsed()) {
+        return tgfuse::ctl::exec_config_set(api_id, api_hash);
     }
 
     return 0;

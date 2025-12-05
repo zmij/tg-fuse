@@ -70,14 +70,35 @@ sudo make install
 
 ## Quick Start
 
-```bash
-# Authenticate with Telegram
-tg-fuse login
+### 1. Configure API Credentials (one-time setup)
 
+tg-fuse requires Telegram API credentials. Get them from https://my.telegram.org/apps:
+
+1. Log in with your phone number
+2. Create a new application (any name/platform)
+3. Copy your `api_id` and `api_hash`
+
+```bash
+tg-fuse config set --api-id=YOUR_API_ID --api-hash=YOUR_API_HASH
+```
+
+This saves credentials to `~/.config/tg-fuse/config.json`.
+
+### 2. Authenticate with Telegram
+
+```bash
+tg-fuse login
+```
+
+You'll be prompted for your phone number and verification code.
+
+### 3. Mount and use
+
+```bash
 # Mount the filesystem (Linux)
 tg-fuse mount /mnt/tg
 
-# Mount the filesystem (macOS - requires different path)
+# Mount the filesystem (macOS)
 tg-fuse mount /Volumes/tg
 
 # Start sending files!

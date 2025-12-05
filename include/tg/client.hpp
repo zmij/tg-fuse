@@ -18,7 +18,9 @@ public:
         std::string api_hash;
         std::string database_directory;
         std::string files_directory;
-        bool use_test_dc = false;  // Use test data center
+        std::string logs_directory;  // If set, TDLib logs go here instead of stderr
+        int32_t log_verbosity = 2;   // 0=fatal, 1=error, 2=warning, 3=info, 4+=debug
+        bool use_test_dc = false;    // Use test data center
         bool use_file_database = true;
         bool use_chat_info_database = true;
         bool use_message_database = true;

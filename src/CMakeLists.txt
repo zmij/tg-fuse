@@ -105,6 +105,8 @@ target_compile_options(tg-fused PRIVATE
 # tg-fuse CLI companion app
 add_executable(tg-fuse
     ctl/main.cpp
+    ctl/config.cpp
+    ctl/login.cpp
 )
 
 # Set C++ standard and output directory
@@ -118,10 +120,13 @@ set_target_properties(tg-fuse PROPERTIES
 # Include directories
 target_include_directories(tg-fuse PRIVATE
     ${PROJECT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}  # For ctl/*.hpp
 )
 
 # Link libraries
 target_link_libraries(tg-fuse PRIVATE
+    tglib
+    nlohmann_json::nlohmann_json
     spdlog::spdlog
     CLI11::CLI11
 )
