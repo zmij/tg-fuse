@@ -137,6 +137,9 @@ private:
     /// Fetch and format messages for a chat
     [[nodiscard]] std::string fetch_and_format_messages(int64_t chat_id);
 
+    /// Format messages and store in cache
+    [[nodiscard]] std::string format_and_cache_messages(int64_t chat_id, const std::vector<tg::Message>& messages);
+
     /// Get chat ID from path info
     [[nodiscard]] int64_t get_chat_id_from_path(const PathInfo& info) const;
 
