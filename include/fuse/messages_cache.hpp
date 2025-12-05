@@ -1,8 +1,8 @@
 #pragma once
 
-#include "fuse/message_formatter.hpp"
 #include "tg/types.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <list>
@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace tgfuse {
 
@@ -18,33 +19,36 @@ namespace tgfuse {
 using UserResolver = std::function<const tg::User&(int64_t sender_id)>;
 using ChatResolver = std::function<const tg::Chat&(int64_t chat_id)>;
 
-/// LRU cache for formatted message content per chat
+/// Configuration for the TLRU formatted messages cache
+struct MessagesCacheConfig {
+    std::size_t max_chats = 100;                                    // Maximum number of chats in LRU
+    std::chrono::seconds format_ttl = std::chrono::hours{1};        // Formatted text staleness TTL (1 hour)
+    std::chrono::seconds max_history_age = std::chrono::hours{48};  // Max age of messages to display
+    std::size_t min_messages = 10;                                  // Minimum messages to fetch from API
+};
+
+/// TLRU (Time-aware LRU) cache for formatted message content per chat
 ///
 /// This cache stores pre-formatted message strings that are ready to be
-/// served via FUSE reads. The cache is updated incrementally when new
-/// messages arrive from TDLib, avoiding expensive re-formatting on each read.
+/// served via FUSE reads. Raw messages are stored in SQLite; this cache
+/// only holds formatted text with a TTL for staleness.
 ///
 /// Key design decisions:
-/// - LRU eviction to bound memory usage
-/// - Append-only updates (new messages are appended to existing content)
+/// - TLRU eviction: entries expire after format_ttl (1 hour default)
+/// - LRU eviction when over capacity
+/// - Raw messages stored in SQLite (not in this cache)
 /// - Thread-safe access with mutex protection
-/// - Tracks content size for write detection
+/// - On new message: invalidate entry (lazy reformat on next read)
 class FormattedMessagesCache {
 public:
-    /// Cache entry for a single chat
+    using Config = MessagesCacheConfig;
+
+    /// Cache entry for a single chat (formatted text only, no raw messages)
     struct CacheEntry {
-        std::string content;           // Formatted messages content
-        int64_t oldest_message_id{0};  // ID of oldest message in content
-        int64_t newest_message_id{0};  // ID of newest message in content
-        std::size_t message_count{0};  // Number of messages in content
-    };
-
-    /// Configuration for the cache
-    struct Config {
-        std::size_t max_chats;              // Maximum number of chats to cache
-        std::size_t max_messages_per_chat;  // Maximum messages per chat
-
-        Config() : max_chats(100), max_messages_per_chat(50) {}
+        std::string content;                                 // Formatted messages content
+        std::size_t message_count{0};                        // Number of messages in content
+        int64_t newest_message_id{0};                        // ID of newest message (for append detection)
+        std::chrono::steady_clock::time_point formatted_at;  // When this was formatted (for TTL)
     };
 
     explicit FormattedMessagesCache(Config config = {});
@@ -54,50 +58,40 @@ public:
     FormattedMessagesCache(const FormattedMessagesCache&) = delete;
     FormattedMessagesCache& operator=(const FormattedMessagesCache&) = delete;
 
-    /// Get formatted content for a chat
+    /// Get formatted content for a chat (returns nullopt if not cached or stale)
     /// @param chat_id The chat ID
-    /// @return The formatted content, or nullopt if not cached
+    /// @return The formatted content, or nullopt if not cached or TTL expired
     [[nodiscard]] std::optional<std::string_view> get(int64_t chat_id);
 
-    /// Get the content size for a chat (for write detection)
+    /// Get the content size for a chat (for fstat reporting)
     /// @param chat_id The chat ID
     /// @return The content size, or 0 if not cached
     [[nodiscard]] std::size_t get_content_size(int64_t chat_id) const;
 
-    /// Check if a chat is cached
+    /// Check if a chat is cached (regardless of staleness)
     [[nodiscard]] bool contains(int64_t chat_id) const;
 
-    /// Set the complete formatted content for a chat
-    /// Used for initial population from message history
+    /// Check if a chat's cache entry is stale (TTL expired)
     /// @param chat_id The chat ID
-    /// @param messages The messages to format (oldest first)
-    /// @param user_resolver Function to resolve user information
-    /// @param chat_resolver Function to resolve chat information
-    void populate(
-        int64_t chat_id,
-        const std::vector<tg::Message>& messages,
-        const UserResolver& user_resolver,
-        const ChatResolver& chat_resolver
-    );
+    /// @return true if stale or not cached
+    [[nodiscard]] bool is_stale(int64_t chat_id) const;
 
-    /// Append a new message to a chat's content
-    /// Called when TDLib sends updateNewMessage
+    /// Store formatted content for a chat
+    /// Called after formatting messages from SQLite
     /// @param chat_id The chat ID
-    /// @param message The new message
-    /// @param user_resolver Function to resolve user information
-    /// @param chat_resolver Function to resolve chat information
-    void append_message(
-        int64_t chat_id,
-        const tg::Message& message,
-        const UserResolver& user_resolver,
-        const ChatResolver& chat_resolver
-    );
+    /// @param content The pre-formatted content string
+    /// @param message_count Number of messages in the content
+    /// @param newest_message_id ID of the newest message
+    void store(int64_t chat_id, std::string content, std::size_t message_count, int64_t newest_message_id);
 
-    /// Invalidate cache for a specific chat
+    /// Invalidate cache for a specific chat (forces reformat on next read)
     void invalidate(int64_t chat_id);
 
     /// Clear all cached content
     void clear();
+
+    /// Get the cache configuration
+    [[nodiscard]] const Config& get_config() const { return config_; }
 
     /// Get cache statistics
     struct Stats {

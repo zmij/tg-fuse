@@ -4,6 +4,7 @@
 #include "tg/cache.hpp"
 #include "tg/types.hpp"
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -62,6 +63,16 @@ public:
     Task<Message> send_text(int64_t chat_id, const std::string& text);
     Task<std::vector<Message>> get_messages(int64_t chat_id, int limit = 100);
     Task<std::vector<Message>> get_last_n_messages(int64_t chat_id, int n);
+
+    /// Fetch messages iteratively until condition is met
+    /// Fetches at least min_messages, and continues until the oldest message
+    /// is older than max_age or there are no more messages.
+    /// @param chat_id Chat to fetch from
+    /// @param min_messages Minimum messages to fetch
+    /// @param max_age Maximum age of oldest message
+    /// @return Vector of messages (unsorted, caller should sort)
+    Task<std::vector<Message>>
+    get_messages_until(int64_t chat_id, std::size_t min_messages, std::chrono::seconds max_age);
 
     // File operations
     Task<Message> send_file(int64_t chat_id, const std::string& path, SendMode mode = SendMode::AUTO);

@@ -2,7 +2,10 @@
 
 #include "fuse/constants.hpp"
 #include "fuse/message_formatter.hpp"
+#include "tg/formatters.hpp"
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -1054,46 +1057,68 @@ int64_t TelegramDataProvider::get_chat_id_from_path(const PathInfo& info) const 
 }
 
 std::size_t TelegramDataProvider::estimate_messages_size(int64_t chat_id) const {
-    // First check the formatted messages cache
+    // First check in-memory TLRU cache
     std::size_t cached_size = messages_cache_->get_content_size(chat_id);
     if (cached_size > 0) {
         return cached_size;
     }
 
-    // Fall back to estimate from raw message cache
-    auto cached = client_.cache().get_last_n_messages(chat_id, 10);
-    if (cached.empty()) {
-        return MessageFormatter::DEFAULT_FALLBACK_SIZE;  // Default fallback for display
+    // Check persisted stats in SQLite
+    auto stats = client_.cache().get_chat_message_stats(chat_id);
+    if (stats && stats->content_size > 0) {
+        return stats->content_size;
     }
-    return MessageFormatter::estimate_size(cached.size());
+
+    // Default for unknown chats - use a reasonable default that allows reading
+    return 4096;
 }
 
 std::string TelegramDataProvider::fetch_and_format_messages(int64_t chat_id) {
-    // Try to get from cache first
+    // Try to get from TLRU cache first (returns nullopt if stale or not cached)
     auto cached = messages_cache_->get(chat_id);
     if (cached) {
-        spdlog::debug("fetch_and_format_messages: cache hit for chat {}, size {}", chat_id, cached->size());
+        spdlog::debug("fetch_and_format_messages: TLRU hit for chat {}, size {}", chat_id, cached->size());
         return std::string(*cached);
     }
 
-    // Cache miss - fetch and populate
+    // TLRU miss - try to get messages from SQLite first
+    const auto& config = messages_cache_->get_config();
+    auto max_age_secs = static_cast<int64_t>(config.max_history_age.count());
+    auto messages = client_.cache().get_messages_for_display(chat_id, max_age_secs);
+
+    // If SQLite has enough messages, format and cache
+    if (!messages.empty() && messages.size() >= config.min_messages) {
+        spdlog::debug(
+            "fetch_and_format_messages: formatting {} messages from SQLite for chat {}", messages.size(), chat_id
+        );
+        return format_and_cache_messages(chat_id, messages);
+    }
+
+    // Not enough in SQLite - fetch from Telegram API
     try {
-        auto task = client_.get_messages(chat_id, 10);
-        auto messages = task.get_result();
+        spdlog::debug("fetch_and_format_messages: fetching from API for chat {}", chat_id);
+        auto task = client_.get_messages_until(chat_id, config.min_messages, config.max_history_age);
+        messages = task.get_result();
 
-        if (messages.empty()) {
-            return "";
+        // Store raw messages in SQLite
+        for (const auto& msg : messages) {
+            client_.cache().cache_message(msg);
         }
 
-        // Populate the cache
-        messages_cache_->populate(chat_id, messages, make_user_resolver(), make_chat_resolver());
+        // Sort by timestamp for display (oldest first)
+        std::sort(messages.begin(), messages.end(), [](const tg::Message& a, const tg::Message& b) {
+            return a.timestamp < b.timestamp;
+        });
 
-        // Return the cached content
-        cached = messages_cache_->get(chat_id);
-        if (cached) {
-            return std::string(*cached);
-        }
-        return "";
+        // Format and cache
+        auto content = format_and_cache_messages(chat_id, messages);
+
+        // Evict old messages from SQLite
+        auto cutoff = std::chrono::system_clock::now() - config.max_history_age;
+        auto cutoff_ts = std::chrono::duration_cast<std::chrono::seconds>(cutoff.time_since_epoch()).count();
+        client_.cache().evict_old_messages(chat_id, cutoff_ts);
+
+        return content;
     } catch (const std::exception& e) {
         spdlog::error("Failed to fetch messages for chat {}: {}", chat_id, e.what());
         return "";
@@ -1163,12 +1188,59 @@ ChatResolver TelegramDataProvider::make_chat_resolver() const {
 
 void TelegramDataProvider::setup_message_callback() {
     client_.set_message_callback([this](const tg::Message& message) {
-        // Append new message to cache if chat is cached
-        if (messages_cache_->contains(message.chat_id)) {
-            messages_cache_->append_message(message.chat_id, message, make_user_resolver(), make_chat_resolver());
-            spdlog::debug("Appended message {} to cache for chat {}", message.id, message.chat_id);
-        }
+        // Store message in SQLite
+        client_.cache().cache_message(message);
+
+        // Update chat message stats
+        auto stats = client_.cache().get_chat_message_stats(message.chat_id);
+        tg::ChatMessageStats new_stats;
+        new_stats.chat_id = message.chat_id;
+        new_stats.message_count = stats ? stats->message_count + 1 : 1;
+        new_stats.content_size = stats ? stats->content_size : 0;  // Will be updated on next format
+        new_stats.last_message_time = message.timestamp;
+        new_stats.oldest_message_time = stats ? stats->oldest_message_time : message.timestamp;
+        new_stats.last_fetch_time = stats ? stats->last_fetch_time : 0;
+        client_.cache().update_chat_message_stats(new_stats);
+
+        // Invalidate TLRU cache for this chat (forces reformat on next read)
+        messages_cache_->invalidate(message.chat_id);
+        spdlog::debug("New message {} for chat {}, cache invalidated", message.id, message.chat_id);
     });
+}
+
+std::string TelegramDataProvider::format_and_cache_messages(int64_t chat_id, const std::vector<tg::Message>& messages) {
+    if (messages.empty()) {
+        return "";
+    }
+
+    // Format all messages
+    std::vector<tg::MessageInfo> infos;
+    infos.reserve(messages.size());
+
+    auto user_resolver = make_user_resolver();
+    auto chat_resolver = make_chat_resolver();
+
+    for (const auto& msg : messages) {
+        infos.push_back({msg, user_resolver(msg.sender_id), chat_resolver(chat_id)});
+    }
+
+    std::string content = fmt::format("{}\n", fmt::join(infos, "\n"));
+
+    // Store in TLRU cache
+    int64_t newest_id = messages.empty() ? 0 : messages.back().id;
+    messages_cache_->store(chat_id, content, messages.size(), newest_id);
+
+    // Update stats in SQLite
+    tg::ChatMessageStats stats;
+    stats.chat_id = chat_id;
+    stats.message_count = messages.size();
+    stats.content_size = content.size();
+    stats.last_message_time = messages.back().timestamp;
+    stats.oldest_message_time = messages.front().timestamp;
+    stats.last_fetch_time = std::time(nullptr);
+    client_.cache().update_chat_message_stats(stats);
+
+    return content;
 }
 
 bool TelegramDataProvider::is_writable(std::string_view path) const {

@@ -1,9 +1,5 @@
 #include "fuse/messages_cache.hpp"
 
-#include "tg/formatters.hpp"
-
-#include <fmt/format.h>
-#include <fmt/ranges.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -18,6 +14,14 @@ std::optional<std::string_view> FormattedMessagesCache::get(int64_t chat_id) {
     auto it = cache_.find(chat_id);
     if (it == cache_.end()) {
         ++miss_count_;
+        return std::nullopt;
+    }
+
+    // Check TTL - if stale, return nullopt (caller should reformat)
+    auto now = std::chrono::steady_clock::now();
+    if ((now - it->second.second.formatted_at) > config_.format_ttl) {
+        ++miss_count_;
+        spdlog::debug("FormattedMessagesCache: TTL expired for chat {}", chat_id);
         return std::nullopt;
     }
 
@@ -41,109 +45,50 @@ bool FormattedMessagesCache::contains(int64_t chat_id) const {
     return cache_.find(chat_id) != cache_.end();
 }
 
-void FormattedMessagesCache::populate(
-    int64_t chat_id,
-    const std::vector<tg::Message>& messages,
-    const UserResolver& user_resolver,
-    const ChatResolver& chat_resolver
-) {
-    if (messages.empty()) {
-        return;
-    }
-
-    // Sort messages by timestamp (oldest first)
-    std::vector<tg::Message> sorted = messages;
-    std::sort(sorted.begin(), sorted.end(), [](const tg::Message& a, const tg::Message& b) {
-        return a.timestamp < b.timestamp;
-    });
-
-    // Remove duplicates by message ID
-    auto last = std::unique(sorted.begin(), sorted.end(), [](const tg::Message& a, const tg::Message& b) {
-        return a.id == b.id;
-    });
-    sorted.erase(last, sorted.end());
-
-    // Limit to max messages
-    if (sorted.size() > config_.max_messages_per_chat) {
-        sorted.erase(sorted.begin(), sorted.begin() + (sorted.size() - config_.max_messages_per_chat));
-    }
-
-    // Build MessageInfo vector for formatting
-    const auto& chat = chat_resolver(chat_id);
-    std::vector<tg::MessageInfo> infos;
-    infos.reserve(sorted.size());
-    for (const auto& msg : sorted) {
-        infos.push_back({msg, user_resolver(msg.sender_id), chat});
-    }
-
-    // Format all messages using fmt::format with ranges
-    std::string content = fmt::format("{}\n", fmt::join(infos, "\n"));
-
-    // Store in cache
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        evict_if_needed();
-
-        CacheEntry entry;
-        entry.content = std::move(content);
-        entry.oldest_message_id = sorted.front().id;
-        entry.newest_message_id = sorted.back().id;
-        entry.message_count = sorted.size();
-
-        // Remove old entry if exists
-        auto it = cache_.find(chat_id);
-        if (it != cache_.end()) {
-            lru_list_.erase(it->second.first);
-            cache_.erase(it);
-        }
-
-        // Add new entry
-        lru_list_.push_front(chat_id);
-        cache_[chat_id] = {lru_list_.begin(), std::move(entry)};
-    }
-
-    spdlog::debug(
-        "FormattedMessagesCache: populated chat {} with {} messages, {} bytes",
-        chat_id,
-        sorted.size(),
-        cache_[chat_id].second.content.size()
-    );
-}
-
-void FormattedMessagesCache::append_message(
-    int64_t chat_id,
-    const tg::Message& message,
-    const UserResolver& user_resolver,
-    const ChatResolver& chat_resolver
-) {
+bool FormattedMessagesCache::is_stale(int64_t chat_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
 
     auto it = cache_.find(chat_id);
     if (it == cache_.end()) {
-        // Chat not cached, nothing to append to
-        return;
+        return true;  // Not cached = stale
     }
 
-    auto& entry = it->second.second;
+    auto now = std::chrono::steady_clock::now();
+    return (now - it->second.second.formatted_at) > config_.format_ttl;
+}
 
-    // Skip if message already in cache (duplicate)
-    if (message.id <= entry.newest_message_id) {
-        return;
+void FormattedMessagesCache::store(
+    int64_t chat_id,
+    std::string content,
+    std::size_t message_count,
+    int64_t newest_message_id
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    evict_if_needed();
+
+    // Remove old entry if exists
+    auto it = cache_.find(chat_id);
+    if (it != cache_.end()) {
+        lru_list_.erase(it->second.first);
+        cache_.erase(it);
     }
 
-    // Format single message using MessageInfo
-    tg::MessageInfo info{message, user_resolver(message.sender_id), chat_resolver(chat_id)};
-    entry.content += fmt::format("{}\n", info);
-    entry.newest_message_id = message.id;
-    ++entry.message_count;
+    // Create new entry
+    CacheEntry entry;
+    entry.content = std::move(content);
+    entry.message_count = message_count;
+    entry.newest_message_id = newest_message_id;
+    entry.formatted_at = std::chrono::steady_clock::now();
 
-    touch(chat_id);
+    // Add to LRU
+    lru_list_.push_front(chat_id);
+    cache_[chat_id] = {lru_list_.begin(), std::move(entry)};
 
     spdlog::debug(
-        "FormattedMessagesCache: appended message {} to chat {}, now {} bytes",
-        message.id,
+        "FormattedMessagesCache: stored chat {} with {} messages, {} bytes",
         chat_id,
-        entry.content.size()
+        message_count,
+        cache_[chat_id].second.content.size()
     );
 }
 
@@ -154,6 +99,7 @@ void FormattedMessagesCache::invalidate(int64_t chat_id) {
     if (it != cache_.end()) {
         lru_list_.erase(it->second.first);
         cache_.erase(it);
+        spdlog::debug("FormattedMessagesCache: invalidated chat {}", chat_id);
     }
 }
 

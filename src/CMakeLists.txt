@@ -4,6 +4,7 @@ add_library(tglib STATIC
     tg/cache.cpp
     tg/client.cpp
     tg/formatters.cpp
+    tg/rate_limiter.cpp
 )
 
 # Set C++20 for the wrapper library (uses coroutines)
@@ -23,6 +24,7 @@ target_link_libraries(tglib PUBLIC
     Td::TdStatic
     SQLite::SQLite3
     spdlog::spdlog
+    bustache
 )
 
 # Compiler flags for the library
@@ -43,6 +45,7 @@ add_library(fuselib STATIC
     fuse/telegram_provider.cpp
     fuse/message_formatter.cpp
     fuse/messages_cache.cpp
+    fuse/background_prefetcher.cpp
 )
 
 # Set C++20 for the FUSE library
