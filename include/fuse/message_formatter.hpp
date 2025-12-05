@@ -1,39 +1,17 @@
 #pragma once
 
-#include "tg/types.hpp"
-
-#include <functional>
+#include <cstddef>
 #include <string>
 #include <vector>
 
 namespace tgfuse {
 
-/// Sender information for message formatting
-struct SenderInfo {
-    std::string display_name;
-    std::string username;  // Without @ prefix
-    bool is_outgoing{false};
-};
-
-/// Message formatter for the messages file
+/// Message formatting utilities
 ///
-/// Keeps formatting logic separate for future enhancements.
-/// Format: > **Display Name (@username)** *HH:MM* message text
+/// Text validation and splitting for Telegram message sending.
+/// Message formatting is done via fmt::format with tg::MessageInfo.
 class MessageFormatter {
 public:
-    /// Format a single message as markdown blockquote
-    /// @param msg The message to format
-    /// @param sender Sender information
-    /// @return Formatted message string
-    static std::string format_message(const tg::Message& msg, const SenderInfo& sender);
-
-    /// Format multiple messages (oldest first for display)
-    /// @param messages Messages to format (will be sorted oldest-first)
-    /// @param get_sender Callback to get sender info for a sender_id
-    /// @return Formatted messages string
-    static std::string
-    format_messages(const std::vector<tg::Message>& messages, const std::function<SenderInfo(int64_t)>& get_sender);
-
     /// Estimate size for a given message count (for file size reporting)
     /// @param message_count Number of messages
     /// @return Estimated byte size

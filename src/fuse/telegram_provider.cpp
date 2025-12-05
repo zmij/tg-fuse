@@ -1086,7 +1086,7 @@ std::string TelegramDataProvider::fetch_and_format_messages(int64_t chat_id) {
         }
 
         // Populate the cache
-        messages_cache_->populate(chat_id, messages, make_sender_resolver());
+        messages_cache_->populate(chat_id, messages, make_user_resolver(), make_chat_resolver());
 
         // Return the cached content
         cached = messages_cache_->get(chat_id);
@@ -1100,23 +1100,64 @@ std::string TelegramDataProvider::fetch_and_format_messages(int64_t chat_id) {
     }
 }
 
-SenderResolver TelegramDataProvider::make_sender_resolver() const {
-    return [this](int64_t sender_id) -> SenderInfo {
-        SenderInfo info;
+UserResolver TelegramDataProvider::make_user_resolver() const {
+    // Static fallback user for unknown senders
+    static tg::User unknown_user;
 
+    return [this](int64_t sender_id) -> const tg::User& {
         // Try to find sender in users cache
         std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& [name, user] : users_) {
             if (user.id == sender_id) {
-                info.display_name = user.display_name();
-                info.username = user.username;
-                return info;
+                return user;
             }
         }
 
         // Fallback for unknown senders
-        info.display_name = "User " + std::to_string(sender_id);
-        return info;
+        unknown_user.id = sender_id;
+        unknown_user.first_name = "User";
+        unknown_user.last_name = std::to_string(sender_id);
+        return unknown_user;
+    };
+}
+
+ChatResolver TelegramDataProvider::make_chat_resolver() const {
+    // Static fallback chat for unknown chats
+    static tg::Chat unknown_chat;
+
+    return [this](int64_t chat_id) -> const tg::Chat& {
+        // Try to find chat in users cache (private chats)
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [name, user] : users_) {
+            if (user.id == chat_id) {
+                // Create a chat from user data
+                static tg::Chat user_chat;
+                user_chat.id = user.id;
+                user_chat.type = tg::ChatType::PRIVATE;
+                user_chat.title = user.display_name();
+                user_chat.username = user.username;
+                return user_chat;
+            }
+        }
+
+        // Try groups
+        for (const auto& [name, chat] : groups_) {
+            if (chat.id == chat_id) {
+                return chat;
+            }
+        }
+
+        // Try channels
+        for (const auto& [name, chat] : channels_) {
+            if (chat.id == chat_id) {
+                return chat;
+            }
+        }
+
+        // Fallback for unknown chats
+        unknown_chat.id = chat_id;
+        unknown_chat.title = "Chat " + std::to_string(chat_id);
+        return unknown_chat;
     };
 }
 
@@ -1124,7 +1165,7 @@ void TelegramDataProvider::setup_message_callback() {
     client_.set_message_callback([this](const tg::Message& message) {
         // Append new message to cache if chat is cached
         if (messages_cache_->contains(message.chat_id)) {
-            messages_cache_->append_message(message.chat_id, message, make_sender_resolver());
+            messages_cache_->append_message(message.chat_id, message, make_user_resolver(), make_chat_resolver());
             spdlog::debug("Appended message {} to cache for chat {}", message.id, message.chat_id);
         }
     });

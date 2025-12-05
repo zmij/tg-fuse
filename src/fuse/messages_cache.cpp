@@ -3,37 +3,14 @@
 #include "tg/formatters.hpp"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <spdlog/spdlog.h>
-#include <bustache/format.hpp>
-#include <bustache/render.hpp>
 
 #include <algorithm>
 
 namespace tgfuse {
 
-namespace {
-
-// Default message template (mustache format)
-constexpr std::string_view DEFAULT_TEMPLATE = R"(> **{{sender}}** *{{time}}* {{text}}{{#media}} {{media}}{{/media}}
-
-)";
-
-// Bustache value wrapper for message data
-struct MessageData {
-    std::string sender;
-    std::string time;
-    std::string text;
-    std::string media;
-    bool has_media;
-};
-
-}  // namespace
-
-FormattedMessagesCache::FormattedMessagesCache(Config config) : config_(std::move(config)) {
-    if (config_.message_template.empty()) {
-        config_.message_template = std::string(DEFAULT_TEMPLATE);
-    }
-}
+FormattedMessagesCache::FormattedMessagesCache(Config config) : config_(std::move(config)) {}
 
 std::optional<std::string_view> FormattedMessagesCache::get(int64_t chat_id) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -67,7 +44,8 @@ bool FormattedMessagesCache::contains(int64_t chat_id) const {
 void FormattedMessagesCache::populate(
     int64_t chat_id,
     const std::vector<tg::Message>& messages,
-    const SenderResolver& resolver
+    const UserResolver& user_resolver,
+    const ChatResolver& chat_resolver
 ) {
     if (messages.empty()) {
         return;
@@ -90,15 +68,16 @@ void FormattedMessagesCache::populate(
         sorted.erase(sorted.begin(), sorted.begin() + (sorted.size() - config_.max_messages_per_chat));
     }
 
-    // Format all messages
-    std::string content;
-    content.reserve(sorted.size() * 150);  // Estimate ~150 bytes per message
-
+    // Build MessageInfo vector for formatting
+    const auto& chat = chat_resolver(chat_id);
+    std::vector<tg::MessageInfo> infos;
+    infos.reserve(sorted.size());
     for (const auto& msg : sorted) {
-        SenderInfo sender = resolver(msg.sender_id);
-        sender.is_outgoing = msg.is_outgoing;
-        content += format_message(msg, sender);
+        infos.push_back({msg, user_resolver(msg.sender_id), chat});
     }
+
+    // Format all messages using fmt::format with ranges
+    std::string content = fmt::format("{}\n", fmt::join(infos, "\n"));
 
     // Store in cache
     {
@@ -134,7 +113,8 @@ void FormattedMessagesCache::populate(
 void FormattedMessagesCache::append_message(
     int64_t chat_id,
     const tg::Message& message,
-    const SenderResolver& resolver
+    const UserResolver& user_resolver,
+    const ChatResolver& chat_resolver
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -151,10 +131,9 @@ void FormattedMessagesCache::append_message(
         return;
     }
 
-    SenderInfo sender = resolver(message.sender_id);
-    sender.is_outgoing = message.is_outgoing;
-
-    entry.content += format_message(message, sender);
+    // Format single message using MessageInfo
+    tg::MessageInfo info{message, user_resolver(message.sender_id), chat_resolver(chat_id)};
+    entry.content += fmt::format("{}\n", info);
     entry.newest_message_id = message.id;
     ++entry.message_count;
 
@@ -196,47 +175,6 @@ FormattedMessagesCache::Stats FormattedMessagesCache::get_stats() const {
     stats.hit_count = hit_count_;
     stats.miss_count = miss_count_;
     return stats;
-}
-
-void FormattedMessagesCache::set_template(std::string_view tmpl) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    config_.message_template = std::string(tmpl);
-    // Invalidate all cached content since format changed
-    lru_list_.clear();
-    cache_.clear();
-}
-
-std::string FormattedMessagesCache::format_message(const tg::Message& msg, const SenderInfo& sender) const {
-    // Format sender name
-    std::string sender_str;
-    if (sender.is_outgoing) {
-        sender_str = "You";
-    } else if (!sender.username.empty()) {
-        sender_str = fmt::format("{} (@{})", sender.display_name, sender.username);
-    } else {
-        sender_str = sender.display_name;
-    }
-
-    // Format time
-    std::string time_str = tg::format_time(msg.timestamp);
-
-    // Format text (handle multiline - continue blockquote on each line)
-    std::string text = msg.text;
-    std::size_t pos = 0;
-    while ((pos = text.find('\n', pos)) != std::string::npos) {
-        text.replace(pos, 1, "\n> ");
-        pos += 3;
-    }
-
-    // Format media
-    std::string media_str;
-    if (msg.has_media()) {
-        media_str = fmt::format("{}", msg.media.value());
-    }
-
-    // Use fmt for now (bustache integration can be added later for custom templates)
-    // The mustache template would allow users to customize the format
-    return fmt::format("> **{}** *{}* {}{}\n\n", sender_str, time_str, text, media_str.empty() ? "" : " " + media_str);
 }
 
 void FormattedMessagesCache::touch(int64_t chat_id) {

@@ -14,8 +14,9 @@
 
 namespace tgfuse {
 
-/// Callback type for resolving sender information
-using SenderResolver = std::function<SenderInfo(int64_t sender_id)>;
+/// Callback type for resolving sender and chat information
+using UserResolver = std::function<const tg::User&(int64_t sender_id)>;
+using ChatResolver = std::function<const tg::Chat&(int64_t chat_id)>;
 
 /// LRU cache for formatted message content per chat
 ///
@@ -42,7 +43,6 @@ public:
     struct Config {
         std::size_t max_chats;              // Maximum number of chats to cache
         std::size_t max_messages_per_chat;  // Maximum messages per chat
-        std::string message_template;       // Mustache template for messages
 
         Config() : max_chats(100), max_messages_per_chat(50) {}
     };
@@ -71,15 +71,27 @@ public:
     /// Used for initial population from message history
     /// @param chat_id The chat ID
     /// @param messages The messages to format (oldest first)
-    /// @param resolver Function to resolve sender information
-    void populate(int64_t chat_id, const std::vector<tg::Message>& messages, const SenderResolver& resolver);
+    /// @param user_resolver Function to resolve user information
+    /// @param chat_resolver Function to resolve chat information
+    void populate(
+        int64_t chat_id,
+        const std::vector<tg::Message>& messages,
+        const UserResolver& user_resolver,
+        const ChatResolver& chat_resolver
+    );
 
     /// Append a new message to a chat's content
     /// Called when TDLib sends updateNewMessage
     /// @param chat_id The chat ID
     /// @param message The new message
-    /// @param resolver Function to resolve sender information
-    void append_message(int64_t chat_id, const tg::Message& message, const SenderResolver& resolver);
+    /// @param user_resolver Function to resolve user information
+    /// @param chat_resolver Function to resolve chat information
+    void append_message(
+        int64_t chat_id,
+        const tg::Message& message,
+        const UserResolver& user_resolver,
+        const ChatResolver& chat_resolver
+    );
 
     /// Invalidate cache for a specific chat
     void invalidate(int64_t chat_id);
@@ -96,13 +108,7 @@ public:
     };
     [[nodiscard]] Stats get_stats() const;
 
-    /// Set the message template (mustache format)
-    void set_template(std::string_view tmpl);
-
 private:
-    /// Format a single message using the template
-    [[nodiscard]] std::string format_message(const tg::Message& msg, const SenderInfo& sender) const;
-
     /// Touch a chat to mark it as recently used (moves to front of LRU)
     void touch(int64_t chat_id);
 

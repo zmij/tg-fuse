@@ -4,6 +4,7 @@ add_executable(tg-fuse-tests
     tg/types_test.cpp
     tg/cache_test.cpp
     tg/async_test.cpp
+    tg/formatters_test.cpp
 )
 
 # Set C++20 for tests (required for coroutines)
