@@ -37,6 +37,15 @@ enum class AuthState {
     READY           // Authenticated and ready
 };
 
+enum class UserStatus {
+    UNKNOWN,    // Default - never seen or hidden
+    ONLINE,     // Currently online
+    OFFLINE,    // Offline with known last seen timestamp
+    RECENTLY,   // Within last 2-3 days
+    LAST_WEEK,  // Within last week
+    LAST_MONTH  // Within last month
+};
+
 // Data structures
 struct User {
     int64_t id;
@@ -44,15 +53,21 @@ struct User {
     std::string first_name;
     std::string last_name;
     std::string phone_number;
-    bool is_contact;
-    int64_t last_message_id;
-    int64_t last_message_timestamp;
+    std::string bio;  // User bio/description
+    bool is_contact{false};
+    UserStatus status{UserStatus::UNKNOWN};
+    int64_t last_seen{0};  // Unix timestamp if status is OFFLINE
+    int64_t last_message_id{0};
+    int64_t last_message_timestamp{0};
 
     // Helper to get display name
     std::string display_name() const;
 
     // Helper to get @username or fallback to name
     std::string get_identifier() const;
+
+    // Helper to get human-readable last seen string
+    std::string get_last_seen_string() const;
 };
 
 struct Chat {

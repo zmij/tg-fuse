@@ -1,6 +1,8 @@
 #include "tg/types.hpp"
 
 #include <algorithm>
+#include <ctime>
+#include <iomanip>
 #include <sstream>
 
 namespace tg {
@@ -25,6 +27,32 @@ std::string User::get_identifier() const {
         return "@" + username;
     }
     return display_name();
+}
+
+std::string User::get_last_seen_string() const {
+    switch (status) {
+        case UserStatus::ONLINE:
+            return "online";
+        case UserStatus::OFFLINE: {
+            if (last_seen == 0) {
+                return "a long time ago";
+            }
+            std::time_t time = static_cast<std::time_t>(last_seen);
+            std::tm* tm = std::localtime(&time);
+            std::ostringstream oss;
+            oss << std::put_time(tm, "%Y-%m-%d %H:%M");
+            return oss.str();
+        }
+        case UserStatus::RECENTLY:
+            return "recently";
+        case UserStatus::LAST_WEEK:
+            return "within a week";
+        case UserStatus::LAST_MONTH:
+            return "within a month";
+        case UserStatus::UNKNOWN:
+        default:
+            return "a long time ago";
+    }
 }
 
 // Chat methods

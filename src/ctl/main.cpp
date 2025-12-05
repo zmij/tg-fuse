@@ -1,5 +1,6 @@
 #include "config.hpp"
 #include "login.hpp"
+#include "users.hpp"
 
 #include <spdlog/spdlog.h>
 #include <CLI/CLI.hpp>
@@ -117,6 +118,11 @@ int main(int argc, char* argv[]) {
     // Status subcommand
     app.add_subcommand("status", "Show authentication status");
 
+    // Users subcommand
+    auto* users_cmd = app.add_subcommand("users", "Manage and list users");
+    bool list_users = false;
+    users_cmd->add_flag("--list,-l", list_users, "List all users from private chats");
+
     // Config subcommand with nested subcommands
     auto* config_cmd = app.add_subcommand("config", "Manage configuration");
     config_cmd->require_subcommand(1);
@@ -158,6 +164,14 @@ int main(int argc, char* argv[]) {
 
     if (config_set_cmd->parsed()) {
         return tgfuse::ctl::exec_config_set(api_id, api_hash);
+    }
+
+    if (users_cmd->parsed()) {
+        if (list_users) {
+            return tgfuse::ctl::exec_users_list();
+        }
+        // Default to list if no flag specified
+        return tgfuse::ctl::exec_users_list();
     }
 
     return 0;

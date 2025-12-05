@@ -39,6 +39,7 @@ add_library(fuselib STATIC
     fuse/operations.cpp
     fuse/vfs.cpp
     fuse/mock_provider.cpp
+    fuse/telegram_provider.cpp
 )
 
 # Set C++20 for the FUSE library
@@ -56,6 +57,7 @@ target_include_directories(fuselib PUBLIC
 # Link dependencies for the library
 target_link_libraries(fuselib PUBLIC
     fuse::fuse
+    tglib
     spdlog::spdlog
 )
 
@@ -89,6 +91,7 @@ target_include_directories(tg-fused PRIVATE
 # Link libraries
 target_link_libraries(tg-fused PRIVATE
     fuselib
+    nlohmann_json::nlohmann_json
     spdlog::spdlog
     CLI11::CLI11
 )
@@ -107,6 +110,7 @@ add_executable(tg-fuse
     ctl/main.cpp
     ctl/config.cpp
     ctl/login.cpp
+    ctl/users.cpp
 )
 
 # Set C++ standard and output directory
