@@ -1,6 +1,7 @@
 #include "fuse/telegram_provider.hpp"
 
 #include "fuse/constants.hpp"
+#include "fuse/message_formatter.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -11,7 +12,13 @@
 namespace tgfuse {
 
 TelegramDataProvider::TelegramDataProvider(tg::TelegramClient& client)
-    : client_(client), users_loaded_(false), groups_loaded_(false), channels_loaded_(false) {}
+    : client_(client),
+      users_loaded_(false),
+      groups_loaded_(false),
+      channels_loaded_(false),
+      messages_cache_(std::make_unique<FormattedMessagesCache>()) {
+    setup_message_callback();
+}
 
 void TelegramDataProvider::refresh_users() {
     try {
@@ -455,9 +462,13 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
         } else if (components.size() == 2) {
             info.category = PathCategory::USER_DIR;
             info.entity_name = components[1];
-        } else if (components.size() == 3 && components[2] == kInfoFile) {
-            info.category = PathCategory::USER_INFO;
+        } else if (components.size() == 3) {
             info.entity_name = components[1];
+            if (components[2] == kInfoFile) {
+                info.category = PathCategory::USER_INFO;
+            } else if (components[2] == kMessagesFile) {
+                info.category = PathCategory::USER_MESSAGES;
+            }
         }
     } else if (components[0] == kContactsDir) {
         if (components.size() == 1) {
@@ -472,9 +483,13 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
         } else if (components.size() == 2) {
             info.category = PathCategory::GROUP_DIR;
             info.entity_name = components[1];
-        } else if (components.size() == 3 && components[2] == kInfoFile) {
-            info.category = PathCategory::GROUP_INFO;
+        } else if (components.size() == 3) {
             info.entity_name = components[1];
+            if (components[2] == kInfoFile) {
+                info.category = PathCategory::GROUP_INFO;
+            } else if (components[2] == kMessagesFile) {
+                info.category = PathCategory::GROUP_MESSAGES;
+            }
         }
     } else if (components[0] == kChannelsDir) {
         if (components.size() == 1) {
@@ -482,9 +497,13 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
         } else if (components.size() == 2) {
             info.category = PathCategory::CHANNEL_DIR;
             info.entity_name = components[1];
-        } else if (components.size() == 3 && components[2] == kInfoFile) {
-            info.category = PathCategory::CHANNEL_INFO;
+        } else if (components.size() == 3) {
             info.entity_name = components[1];
+            if (components[2] == kInfoFile) {
+                info.category = PathCategory::CHANNEL_INFO;
+            } else if (components[2] == kMessagesFile) {
+                info.category = PathCategory::CHANNEL_MESSAGES;
+            }
         }
     }
 
@@ -550,14 +569,23 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
         case PathCategory::USER_DIR: {
             auto* user = find_user_by_dir_name(info.entity_name);
             if (user) {
-                // Use a large fixed size since content is generated dynamically
-                auto entry = Entry::file(std::string(kInfoFile), 4096);
+                // .info file
+                auto info_entry = Entry::file(std::string(kInfoFile), 4096);
                 if (user->last_message_timestamp > 0) {
-                    entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
-                    entry.atime = entry.mtime;
-                    entry.ctime = entry.mtime;
+                    info_entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
+                    info_entry.atime = info_entry.mtime;
+                    info_entry.ctime = info_entry.mtime;
                 }
-                entries.push_back(std::move(entry));
+                entries.push_back(std::move(info_entry));
+
+                // messages file (mode 0600 = owner read/write only)
+                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(user->id), 0600);
+                if (user->last_message_timestamp > 0) {
+                    msg_entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
+                    msg_entry.atime = msg_entry.mtime;
+                    msg_entry.ctime = msg_entry.mtime;
+                }
+                entries.push_back(std::move(msg_entry));
             }
             break;
         }
@@ -577,13 +605,23 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
         case PathCategory::GROUP_DIR: {
             auto* group = find_group_by_dir_name(info.entity_name);
             if (group) {
-                auto entry = Entry::file(std::string(kInfoFile), 4096);
+                // .info file
+                auto info_entry = Entry::file(std::string(kInfoFile), 4096);
                 if (group->last_message_timestamp > 0) {
-                    entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
-                    entry.atime = entry.mtime;
-                    entry.ctime = entry.mtime;
+                    info_entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                    info_entry.atime = info_entry.mtime;
+                    info_entry.ctime = info_entry.mtime;
                 }
-                entries.push_back(std::move(entry));
+                entries.push_back(std::move(info_entry));
+
+                // messages file (mode 0600 = owner read/write only)
+                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(group->id), 0600);
+                if (group->last_message_timestamp > 0) {
+                    msg_entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                    msg_entry.atime = msg_entry.mtime;
+                    msg_entry.ctime = msg_entry.mtime;
+                }
+                entries.push_back(std::move(msg_entry));
             }
             break;
         }
@@ -603,13 +641,23 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
         case PathCategory::CHANNEL_DIR: {
             auto* channel = find_channel_by_dir_name(info.entity_name);
             if (channel) {
-                auto entry = Entry::file(std::string(kInfoFile), 4096);
+                // .info file
+                auto info_entry = Entry::file(std::string(kInfoFile), 4096);
                 if (channel->last_message_timestamp > 0) {
-                    entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
-                    entry.atime = entry.mtime;
-                    entry.ctime = entry.mtime;
+                    info_entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
+                    info_entry.atime = info_entry.mtime;
+                    info_entry.ctime = info_entry.mtime;
                 }
-                entries.push_back(std::move(entry));
+                entries.push_back(std::move(info_entry));
+
+                // messages file (mode 0600 = owner read/write only)
+                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(channel->id), 0600);
+                if (channel->last_message_timestamp > 0) {
+                    msg_entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
+                    msg_entry.atime = msg_entry.mtime;
+                    msg_entry.ctime = msg_entry.mtime;
+                }
+                entries.push_back(std::move(msg_entry));
             }
             break;
         }
@@ -722,6 +770,48 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
             auto* channel = find_channel_by_dir_name(info.entity_name);
             if (channel) {
                 auto entry = Entry::file(std::string(kInfoFile), 4096);
+                if (channel->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                return entry;
+            }
+            break;
+        }
+
+        case PathCategory::USER_MESSAGES: {
+            auto* user = find_user_by_dir_name(info.entity_name);
+            if (user) {
+                auto entry = Entry::file("messages", estimate_messages_size(user->id), 0600);
+                if (user->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                return entry;
+            }
+            break;
+        }
+
+        case PathCategory::GROUP_MESSAGES: {
+            auto* group = find_group_by_dir_name(info.entity_name);
+            if (group) {
+                auto entry = Entry::file("messages", estimate_messages_size(group->id), 0600);
+                if (group->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                return entry;
+            }
+            break;
+        }
+
+        case PathCategory::CHANNEL_MESSAGES: {
+            auto* channel = find_channel_by_dir_name(info.entity_name);
+            if (channel) {
+                auto entry = Entry::file("messages", estimate_messages_size(channel->id), 0600);
                 if (channel->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
                     entry.atime = entry.mtime;
@@ -865,6 +955,12 @@ FileContent TelegramDataProvider::read_file(std::string_view path) {
             content.data = generate_channel_info(*channel);
             content.readable = true;
         }
+    } else if (is_messages_path(info.category)) {
+        int64_t chat_id = get_chat_id_from_path(info);
+        if (chat_id != 0) {
+            content.data = fetch_and_format_messages(chat_id);
+            content.readable = true;
+        }
     }
 
     return content;
@@ -929,6 +1025,222 @@ std::string TelegramDataProvider::generate_user_info(const tg::User& user) const
     oss << "Last seen: " << user.get_last_seen_string() << "\n";
 
     return oss.str();
+}
+
+bool TelegramDataProvider::is_messages_path(PathCategory category) const {
+    return category == PathCategory::USER_MESSAGES || category == PathCategory::GROUP_MESSAGES ||
+           category == PathCategory::CHANNEL_MESSAGES;
+}
+
+int64_t TelegramDataProvider::get_chat_id_from_path(const PathInfo& info) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    switch (info.category) {
+        case PathCategory::USER_MESSAGES: {
+            auto* user = find_user_by_dir_name(info.entity_name);
+            return user ? user->id : 0;
+        }
+        case PathCategory::GROUP_MESSAGES: {
+            auto* group = find_group_by_dir_name(info.entity_name);
+            return group ? group->id : 0;
+        }
+        case PathCategory::CHANNEL_MESSAGES: {
+            auto* channel = find_channel_by_dir_name(info.entity_name);
+            return channel ? channel->id : 0;
+        }
+        default:
+            return 0;
+    }
+}
+
+std::size_t TelegramDataProvider::estimate_messages_size(int64_t chat_id) const {
+    // First check the formatted messages cache
+    std::size_t cached_size = messages_cache_->get_content_size(chat_id);
+    if (cached_size > 0) {
+        return cached_size;
+    }
+
+    // Fall back to estimate from raw message cache
+    auto cached = client_.cache().get_last_n_messages(chat_id, 10);
+    if (cached.empty()) {
+        return MessageFormatter::DEFAULT_FALLBACK_SIZE;  // Default fallback for display
+    }
+    return MessageFormatter::estimate_size(cached.size());
+}
+
+std::string TelegramDataProvider::fetch_and_format_messages(int64_t chat_id) {
+    // Try to get from cache first
+    auto cached = messages_cache_->get(chat_id);
+    if (cached) {
+        spdlog::debug("fetch_and_format_messages: cache hit for chat {}, size {}", chat_id, cached->size());
+        return std::string(*cached);
+    }
+
+    // Cache miss - fetch and populate
+    try {
+        auto task = client_.get_messages(chat_id, 10);
+        auto messages = task.get_result();
+
+        if (messages.empty()) {
+            return "";
+        }
+
+        // Populate the cache
+        messages_cache_->populate(chat_id, messages, make_sender_resolver());
+
+        // Return the cached content
+        cached = messages_cache_->get(chat_id);
+        if (cached) {
+            return std::string(*cached);
+        }
+        return "";
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to fetch messages for chat {}: {}", chat_id, e.what());
+        return "";
+    }
+}
+
+SenderResolver TelegramDataProvider::make_sender_resolver() const {
+    return [this](int64_t sender_id) -> SenderInfo {
+        SenderInfo info;
+
+        // Try to find sender in users cache
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [name, user] : users_) {
+            if (user.id == sender_id) {
+                info.display_name = user.display_name();
+                info.username = user.username;
+                return info;
+            }
+        }
+
+        // Fallback for unknown senders
+        info.display_name = "User " + std::to_string(sender_id);
+        return info;
+    };
+}
+
+void TelegramDataProvider::setup_message_callback() {
+    client_.set_message_callback([this](const tg::Message& message) {
+        // Append new message to cache if chat is cached
+        if (messages_cache_->contains(message.chat_id)) {
+            messages_cache_->append_message(message.chat_id, message, make_sender_resolver());
+            spdlog::debug("Appended message {} to cache for chat {}", message.id, message.chat_id);
+        }
+    });
+}
+
+bool TelegramDataProvider::is_writable(std::string_view path) const {
+    auto info = parse_path(path);
+    return is_messages_path(info.category);
+}
+
+bool TelegramDataProvider::is_append_only(std::string_view path) const {
+    return is_writable(path);  // All writable files are append-only
+}
+
+int TelegramDataProvider::truncate_file(std::string_view path, off_t size) {
+    auto info = parse_path(path);
+
+    // Append-only files: only allow truncate to current size (no-op) or zero
+    if (is_messages_path(info.category)) {
+        if (size == 0) {
+            // Truncate to zero is allowed (it's a no-op for append-only)
+            return 0;
+        }
+        // Other truncates are not permitted
+        return -EPERM;
+    }
+
+    return -EACCES;  // Not writable
+}
+
+WriteResult TelegramDataProvider::write_file(std::string_view path, const char* data, std::size_t size, off_t offset) {
+    auto info = parse_path(path);
+
+    if (!is_messages_path(info.category)) {
+        return WriteResult{false, 0, "Path is not writable"};
+    }
+
+    int64_t chat_id = get_chat_id_from_path(info);
+    if (chat_id == 0) {
+        return WriteResult{false, 0, "Chat not found"};
+    }
+
+    // Get content size from the formatted messages cache
+    std::size_t current_size = messages_cache_->get_content_size(chat_id);
+    spdlog::debug("write_file: offset={}, size={}, cached_content_size={}", offset, size, current_size);
+
+    // If cache is empty (current_size == 0), treat all content as new
+    if (current_size == 0) {
+        spdlog::debug("write_file: no cached messages, sending all content");
+        return send_message(chat_id, data, size);
+    }
+
+    // If writing at offset 0 with size larger than current content,
+    // the shell likely read the file, appended new content, and wrote everything back.
+    // Extract just the new content beyond the current size.
+    if (offset == 0 && size > current_size) {
+        const char* new_content = data + current_size;
+        std::size_t new_size = size - current_size;
+        spdlog::debug("write_file: extracting new content at offset {}, size {}", current_size, new_size);
+        return send_message(chat_id, new_content, new_size);
+    }
+
+    // If offset is beyond current content, ignore (likely stale data)
+    if (static_cast<std::size_t>(offset) > current_size) {
+        spdlog::debug("write_file: ignoring write at offset {} beyond content size {}", offset, current_size);
+        return WriteResult{true, static_cast<int>(size), ""};
+    }
+
+    // Writing within existing content - ignore (it's a rewrite of existing messages)
+    spdlog::debug("write_file: ignoring write within existing content");
+    return WriteResult{true, static_cast<int>(size), ""};
+}
+
+WriteResult TelegramDataProvider::send_message(int64_t chat_id, const char* data, std::size_t size) {
+    spdlog::debug("send_message called: chat_id={}, size={}", chat_id, size);
+
+    // Empty writes are no-ops (success)
+    if (size == 0) {
+        spdlog::debug("send_message: empty write, returning success");
+        return WriteResult{true, 0, ""};
+    }
+
+    // Validate text content (reject binary data)
+    if (!MessageFormatter::is_valid_text(data, size)) {
+        spdlog::warn("Rejected binary data write to chat {}", chat_id);
+        return WriteResult{false, 0, "Binary data not allowed"};
+    }
+
+    // Convert to string and trim trailing newlines
+    std::string text(data, size);
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+        text.pop_back();
+    }
+
+    if (text.empty()) {
+        spdlog::debug("send_message: text empty after trimming newlines, returning success");
+        return WriteResult{true, static_cast<int>(size), ""};
+    }
+
+    spdlog::debug("send_message: sending text '{}'", text.substr(0, 100));
+
+    // Split message if too large
+    auto chunks = MessageFormatter::split_message(text);
+
+    try {
+        for (const auto& chunk : chunks) {
+            auto task = client_.send_text(chat_id, chunk);
+            task.get_result();  // Wait for completion
+        }
+
+        spdlog::debug("Sent {} message(s) to chat {}", chunks.size(), chat_id);
+        return WriteResult{true, static_cast<int>(size), ""};
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to send message to chat {}: {}", chat_id, e.what());
+        return WriteResult{false, 0, e.what()};
+    }
 }
 
 }  // namespace tgfuse

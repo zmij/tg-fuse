@@ -4,6 +4,7 @@
 #include "tg/cache.hpp"
 #include "tg/types.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -77,6 +78,13 @@ public:
     // Cache access
     CacheManager& cache() { return *cache_; }
     const CacheManager& cache() const { return *cache_; }
+
+    // Event callbacks
+    using MessageCallback = std::function<void(const Message&)>;
+
+    /// Set callback for new messages
+    /// The callback is called from the TDLib event loop thread
+    void set_message_callback(MessageCallback callback);
 
 private:
     class Impl;

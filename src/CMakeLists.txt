@@ -40,6 +40,8 @@ add_library(fuselib STATIC
     fuse/vfs.cpp
     fuse/mock_provider.cpp
     fuse/telegram_provider.cpp
+    fuse/message_formatter.cpp
+    fuse/messages_cache.cpp
 )
 
 # Set C++20 for the FUSE library
@@ -59,6 +61,8 @@ target_link_libraries(fuselib PUBLIC
     fuse::fuse
     tglib
     spdlog::spdlog
+    fmt::fmt
+    bustache
 )
 
 # Compiler flags for the library

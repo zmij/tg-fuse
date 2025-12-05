@@ -110,9 +110,15 @@ int DataProviderOperations::open(const char* path, struct fuse_file_info* fi) {
         return -EISDIR;
     }
 
-    // For now, we only support read-only access
-    if ((fi->flags & O_ACCMODE) != O_RDONLY) {
-        return -EACCES;
+    int access_mode = fi->flags & O_ACCMODE;
+
+    // Check write access
+    if (access_mode != O_RDONLY) {
+        if (!provider_->is_writable(path)) {
+            return -EACCES;
+        }
+        // For append-only files, force O_APPEND behaviour
+        // (the actual append semantics are handled in write_file)
     }
 
     return 0;
@@ -144,5 +150,28 @@ int DataProviderOperations::release(const char* path, struct fuse_file_info* fi)
     // Nothing to do for mock filesystem
     return 0;
 }
+
+int DataProviderOperations::write(
+    const char* path,
+    const char* buf,
+    size_t size,
+    off_t offset,
+    struct fuse_file_info* fi
+) {
+    (void)fi;  // Unused
+
+    if (!provider_->is_writable(path)) {
+        return -EACCES;
+    }
+
+    auto result = provider_->write_file(path, buf, size, offset);
+    if (!result.success) {
+        return -EIO;
+    }
+
+    return result.bytes_written;
+}
+
+int DataProviderOperations::truncate(const char* path, off_t size) { return provider_->truncate_file(path, size); }
 
 }  // namespace tgfuse

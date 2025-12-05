@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fuse/data_provider.hpp"
+#include "fuse/messages_cache.hpp"
 #include "tg/client.hpp"
 #include "tg/types.hpp"
 
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -34,6 +36,12 @@ public:
     [[nodiscard]] std::string read_link(std::string_view path) override;
     [[nodiscard]] std::string get_filesystem_name() const override { return "tg-fuse"; }
 
+    // Write operations
+    WriteResult write_file(std::string_view path, const char* data, std::size_t size, off_t offset) override;
+    int truncate_file(std::string_view path, off_t size) override;
+    [[nodiscard]] bool is_writable(std::string_view path) const override;
+    [[nodiscard]] bool is_append_only(std::string_view path) const override;
+
     /// Refresh user cache from Telegram
     void refresh_users();
 
@@ -42,19 +50,22 @@ private:
     enum class PathCategory {
         NOT_FOUND,  // Default value - path not recognised
         ROOT,
-        USERS_DIR,        // /users
-        CONTACTS_DIR,     // /contacts
-        GROUPS_DIR,       // /groups
-        CHANNELS_DIR,     // /channels
-        USER_DIR,         // /users/alice
-        USER_INFO,        // /users/alice/.info
-        GROUP_DIR,        // /groups/dev_chat
-        GROUP_INFO,       // /groups/dev_chat/.info
-        CHANNEL_DIR,      // /channels/news
-        CHANNEL_INFO,     // /channels/news/.info
-        CONTACT_SYMLINK,  // /contacts/alice
-        ROOT_SYMLINK,     // /@alice
-        SELF_SYMLINK      // /self
+        USERS_DIR,         // /users
+        CONTACTS_DIR,      // /contacts
+        GROUPS_DIR,        // /groups
+        CHANNELS_DIR,      // /channels
+        USER_DIR,          // /users/alice
+        USER_INFO,         // /users/alice/.info
+        USER_MESSAGES,     // /users/alice/messages
+        GROUP_DIR,         // /groups/dev_chat
+        GROUP_INFO,        // /groups/dev_chat/.info
+        GROUP_MESSAGES,    // /groups/dev_chat/messages
+        CHANNEL_DIR,       // /channels/news
+        CHANNEL_INFO,      // /channels/news/.info
+        CHANNEL_MESSAGES,  // /channels/news/messages
+        CONTACT_SYMLINK,   // /contacts/alice
+        ROOT_SYMLINK,      // /@alice
+        SELF_SYMLINK       // /self
     };
 
     /// Parsed path information
@@ -123,6 +134,21 @@ private:
     /// Generate info content for a channel
     [[nodiscard]] std::string generate_channel_info(const tg::Chat& chat) const;
 
+    /// Fetch and format messages for a chat
+    [[nodiscard]] std::string fetch_and_format_messages(int64_t chat_id);
+
+    /// Get chat ID from path info
+    [[nodiscard]] int64_t get_chat_id_from_path(const PathInfo& info) const;
+
+    /// Check if a path category is a messages file
+    [[nodiscard]] bool is_messages_path(PathCategory category) const;
+
+    /// Estimate messages file size from cache
+    [[nodiscard]] std::size_t estimate_messages_size(int64_t chat_id) const;
+
+    /// Send a message to a chat, handling large messages
+    [[nodiscard]] WriteResult send_message(int64_t chat_id, const char* data, std::size_t size);
+
     tg::TelegramClient& client_;
 
     // Cached user data (keyed by directory name)
@@ -138,7 +164,16 @@ private:
     std::map<std::string, tg::Chat> channels_;
     std::atomic<bool> channels_loaded_;
 
+    // Formatted messages cache (RCU-style, updated on message notifications)
+    std::unique_ptr<FormattedMessagesCache> messages_cache_;
+
     mutable std::mutex mutex_;
+
+    /// Create sender resolver function for message formatting
+    [[nodiscard]] SenderResolver make_sender_resolver() const;
+
+    /// Set up message callback to update cache on new messages
+    void setup_message_callback();
 };
 
 }  // namespace tgfuse
