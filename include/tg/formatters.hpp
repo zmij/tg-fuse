@@ -251,7 +251,7 @@ auto format_timestamp(int64_t ts_sec, FormatContext& ctx) -> decltype(ctx.out())
             return fmt::format_to(ctx.out(), "{} {}", hours, hour_forms[1]);
         }
     }
-    return fmt::format_to(ctx.out(), "{}", timestamp);
+    return fmt::format_to(ctx.out(), "{:%Y-%m-%d %H:%M}", timestamp);
 }
 
 }  // namespace tg::detail

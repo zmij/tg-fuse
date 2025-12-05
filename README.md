@@ -2,19 +2,6 @@
 
 A FUSE-based virtual filesystem that lets you send files to Telegram contacts using standard Unix file operations.
 
-## 🚧 Development Status
-
-**Current Phase:** Phase 2 Complete - TDLib Integration Done
-**Progress:** ~75% Complete
-
-- ✅ Phase 1: Core infrastructure (data structures, coroutines, caching)
-- ✅ Phase 2: TDLib integration (authentication, messaging, files)
-- ⏳ Phase 3: Testing and refinement
-- ⏳ Phase 4: FUSE filesystem integration
-- ⏳ Phase 5: Polish and documentation
-
-See [PHASE2_COMPLETE.md](PHASE2_COMPLETE.md) for implementation details.
-
 ```bash
 # Send a file like you'd copy to any directory
 cp vacation_photos.zip /mnt/tg/@friend_username
@@ -115,26 +102,39 @@ tg-fuse creates a virtual filesystem where Telegram contacts, groups, and channe
 ```
 /mnt/tg/  (or /Volumes/tg on macOS)
 ├── users/
-│   ├── alice/          # User directory
-│   │   └── .info       # User information (read-only)
+│   ├── alice/              # User directory
+│   │   ├── .info           # User information (read-only)
+│   │   └── messages        # Chat messages (read/append)
 │   └── bob/
-│       └── .info
+│       ├── .info
+│       └── messages
+├── contacts/
+│   ├── alice -> ../users/alice   # Symlinks to contact users
+│   └── bob -> ../users/bob
 ├── groups/
-│   ├── family/         # Group directory
-│   │   └── .info       # Group information
+│   ├── family/             # Group directory
+│   │   ├── .info           # Group information
+│   │   └── messages        # Group messages (read/append)
 │   └── work/
-│       └── .info
+│       ├── .info
+│       └── messages
 ├── channels/
-│   ├── news_channel/   # Channel directory
-│   │   └── .info       # Channel information
+│   ├── news_channel/       # Channel directory
+│   │   ├── .info           # Channel information
+│   │   └── messages        # Channel messages (read/append)
 │   └── tech_updates/
-│       └── .info
-├── @alice -> users/alice   # Symlink for quick access
+│       ├── .info
+│       └── messages
+├── @alice -> users/alice   # Symlink for quick access (contacts only)
 ├── @bob -> users/bob
 └── ...
 ```
 
-**Symlink convention:** `@<username>` at root resolves to `users/<username>` for convenient access.
+**Files:**
+- `.info` - Read-only file with entity details (username, name, bio, etc.)
+- `messages` - Read recent messages or send new ones (append-only)
+
+**Symlinks:** `@<username>` at root and entries in `/contacts/` provide quick access to contact users.
 
 ## Platform Notes
 
