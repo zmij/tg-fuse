@@ -76,6 +76,8 @@ public:
 
     // File operations
     Task<Message> send_file(int64_t chat_id, const std::string& path, SendMode mode = SendMode::AUTO);
+    Task<Message>
+    send_file_by_id(int64_t chat_id, const std::string& remote_file_id, const std::string& filename, SendMode mode);
     Task<std::vector<FileListItem>> list_media(int64_t chat_id);
     Task<std::vector<FileListItem>> list_files(int64_t chat_id);
     Task<std::string> download_file(const std::string& file_id, const std::string& destination_path = "");

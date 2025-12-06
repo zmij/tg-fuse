@@ -725,16 +725,18 @@ public:
         );
 
         while (true) {
-            auto response = send_query_sync(td_api::make_object<td_api::searchChatMessages>(
-                chat_id,
-                nullptr,  // topic_id
-                "",       // query (empty = all)
-                nullptr,  // sender_id (null = any sender)
-                from_message_id,
-                0,                               // offset
-                batch_size,                      // limit
-                make_search_filter(filter_type)  // filter (recreated each time)
-            ));
+            auto response = send_query_sync(
+                td_api::make_object<td_api::searchChatMessages>(
+                    chat_id,
+                    nullptr,  // topic_id
+                    "",       // query (empty = all)
+                    nullptr,  // sender_id (null = any sender)
+                    from_message_id,
+                    0,                               // offset
+                    batch_size,                      // limit
+                    make_search_filter(filter_type)  // filter (recreated each time)
+                )
+            );
 
             if (response->get_id() != td_api::foundChatMessages::ID) {
                 spdlog::warn("search_chat_files_sync: unexpected response type {}", response->get_id());
@@ -851,6 +853,14 @@ public:
             return message;
         }
 
+        // Log error details if available
+        if (response->get_id() == td_api::error::ID) {
+            auto error = td::move_tl_object_as<td_api::error>(response);
+            spdlog::error("TDLib error sending file {}: [{}] {}", path, error->code_, error->message_);
+            throw FileUploadException(path + " (TDLib error: " + error->message_ + ")");
+        }
+
+        spdlog::error("Unexpected response type {} when sending file {}", response->get_id(), path);
         throw FileUploadException(path);
     }
 
@@ -939,11 +949,72 @@ public:
         return "";
     }
 
+    // Send file using remote file ID (for deduplication/reuse)
+    Message send_file_by_id_sync(
+        int64_t chat_id,
+        const std::string& remote_file_id,
+        const std::string& filename,
+        SendMode mode
+    ) {
+        auto input_file = td_api::make_object<td_api::inputFileRemote>(remote_file_id);
+
+        td_api::object_ptr<td_api::InputMessageContent> input_content;
+
+        if (mode == SendMode::MEDIA) {
+            // Detect media type from filename
+            auto detected_type = detect_media_type(filename, detect_mime_type(filename));
+
+            if (detected_type == MediaType::PHOTO) {
+                input_content = td_api::make_object<td_api::inputMessagePhoto>(
+                    std::move(input_file), nullptr, std::vector<int32_t>(), 0, 0, nullptr, false, nullptr, false
+                );
+            } else if (detected_type == MediaType::VIDEO || detected_type == MediaType::ANIMATION) {
+                input_content = td_api::make_object<td_api::inputMessageVideo>(
+                    std::move(input_file),
+                    nullptr,
+                    nullptr,
+                    0,
+                    std::vector<int32_t>(),
+                    0,
+                    0,
+                    0,
+                    false,
+                    nullptr,
+                    false,
+                    nullptr,
+                    false
+                );
+            } else {
+                // Fallback to document for other media types
+                input_content =
+                    td_api::make_object<td_api::inputMessageDocument>(std::move(input_file), nullptr, false, nullptr);
+            }
+        } else {
+            // Send as document
+            input_content =
+                td_api::make_object<td_api::inputMessageDocument>(std::move(input_file), nullptr, false, nullptr);
+        }
+
+        auto response = send_query_sync(
+            td_api::make_object<td_api::sendMessage>(
+                chat_id, nullptr, nullptr, nullptr, nullptr, std::move(input_content)
+            )
+        );
+
+        if (response->get_id() == td_api::message::ID) {
+            auto msg_obj = td::move_tl_object_as<td_api::message>(response);
+            auto message = convert_message(*msg_obj);
+            cache_->cache_message(message);
+            return message;
+        }
+
+        throw OperationException("Failed to send file by remote ID");
+    }
+
     // Download file using remote file ID (persistent string)
     std::string download_file_sync(const std::string& remote_file_id, const std::string& destination_path) {
         // First, get the file info using remote ID
-        auto file_response =
-            send_query_sync(td_api::make_object<td_api::getRemoteFile>(remote_file_id, nullptr));
+        auto file_response = send_query_sync(td_api::make_object<td_api::getRemoteFile>(remote_file_id, nullptr));
 
         if (file_response->get_id() != td_api::file::ID) {
             throw FileNotFoundException(remote_file_id);
@@ -1167,6 +1238,15 @@ TelegramClient::get_messages_until(int64_t chat_id, std::size_t min_messages, st
 
 Task<Message> TelegramClient::send_file(int64_t chat_id, const std::string& path, SendMode mode) {
     co_return impl_->send_file_sync(chat_id, path, mode);
+}
+
+Task<Message> TelegramClient::send_file_by_id(
+    int64_t chat_id,
+    const std::string& remote_file_id,
+    const std::string& filename,
+    SendMode mode
+) {
+    co_return impl_->send_file_by_id_sync(chat_id, remote_file_id, filename, mode);
 }
 
 Task<std::vector<FileListItem>> TelegramClient::list_media(int64_t chat_id) {

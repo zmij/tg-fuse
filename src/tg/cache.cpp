@@ -134,6 +134,14 @@ void CacheManager::create_tables() {
             last_fetch_time INTEGER NOT NULL DEFAULT 0,
             oldest_message_time INTEGER NOT NULL DEFAULT 0
         );
+
+        CREATE TABLE IF NOT EXISTS upload_cache (
+            file_hash TEXT PRIMARY KEY,
+            file_size INTEGER NOT NULL,
+            remote_file_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_upload_cache_size ON upload_cache(file_size);
     )";
 
     exec_sql(db_, schema);
@@ -929,6 +937,56 @@ void CacheManager::evict_old_messages(int64_t chat_id, int64_t older_than_timest
     sqlite3_finalize(stmt);
 
     spdlog::debug("Evicted old messages from chat {} (older than {})", chat_id, older_than_timestamp);
+}
+
+std::optional<std::string> CacheManager::get_cached_upload(const std::string& file_hash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const char* sql = "SELECT remote_file_id FROM upload_cache WHERE file_hash = ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw DatabaseException("Failed to prepare statement");
+    }
+
+    sqlite3_bind_text(stmt, 1, file_hash.c_str(), -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        std::string remote_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        sqlite3_finalize(stmt);
+        spdlog::debug("Found cached upload for hash {}", file_hash.substr(0, 16));
+        return remote_id;
+    }
+
+    sqlite3_finalize(stmt);
+    return std::nullopt;
+}
+
+void CacheManager::cache_upload(const std::string& file_hash, int64_t file_size, const std::string& remote_file_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const char* sql = R"(
+        INSERT OR REPLACE INTO upload_cache
+        (file_hash, file_size, remote_file_id, created_at)
+        VALUES (?, ?, ?, strftime('%s', 'now'))
+    )";
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw DatabaseException("Failed to prepare statement");
+    }
+
+    sqlite3_bind_text(stmt, 1, file_hash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, file_size);
+    sqlite3_bind_text(stmt, 3, remote_file_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        throw DatabaseException("Failed to cache upload");
+    }
+
+    sqlite3_finalize(stmt);
+    spdlog::debug("Cached upload: hash={}, size={}, remote_id={}", file_hash.substr(0, 16), file_size, remote_file_id);
 }
 
 }  // namespace tg
