@@ -7,7 +7,7 @@ A FUSE-based virtual filesystem that lets you send files to Telegram contacts us
 cp vacation_photos.zip /mnt/tg/@friend_username
 
 # Send a quick message
-echo "Running late, be there in 10!" > /mnt/tg/@friend_username/text
+echo "Running late, be there in 10!" > /mnt/tg/@friend_username/txt
 
 # Send to a group chat
 cp presentation.pdf /mnt/tg/groups/work_group
@@ -91,7 +91,7 @@ tg-fuse mount /Volumes/tg
 # Start sending files!
 cp document.pdf /mnt/tg/@colleague        # Linux
 cp document.pdf /Volumes/tg/@colleague    # macOS
-echo "Check this out" > /mnt/tg/@colleague/text
+echo "Check this out" > /mnt/tg/@colleague/txt
 ```
 
 ## How it works
@@ -104,7 +104,8 @@ tg-fuse creates a virtual filesystem where Telegram contacts, groups, and channe
 ├── users/
 │   ├── alice/              # User directory
 │   │   ├── .info           # User information (read-only)
-│   │   ├── messages        # Chat messages (read/append)
+│   │   ├── messages        # Chat messages (read-only)
+│   │   ├── txt             # Send text messages (write-only)
 │   │   ├── files/          # Shared documents (read-only)
 │   │   │   ├── 20241205-1430-report.pdf
 │   │   │   └── 20241206-0900-notes.docx
@@ -114,31 +115,39 @@ tg-fuse creates a virtual filesystem where Telegram contacts, groups, and channe
 │   └── bob/
 │       ├── .info
 │       ├── messages
+│       ├── txt
 │       ├── files/
 │       └── media/
 ├── contacts/
 │   ├── alice -> ../users/alice   # Symlinks to contact users
 │   └── bob -> ../users/bob
+├── text/
+│   ├── @alice -> ../users/alice/txt   # Quick access to txt files
+│   └── @bob -> ../users/bob/txt
 ├── groups/
 │   ├── family/             # Group directory
 │   │   ├── .info           # Group information
-│   │   ├── messages        # Group messages (read/append)
+│   │   ├── messages        # Group messages (read-only)
+│   │   ├── txt             # Send text messages
 │   │   ├── files/          # Shared documents
 │   │   └── media/          # Shared photos/videos
 │   └── work/
 │       ├── .info
 │       ├── messages
+│       ├── txt
 │       ├── files/
 │       └── media/
 ├── channels/
 │   ├── news_channel/       # Channel directory
 │   │   ├── .info           # Channel information
-│   │   ├── messages        # Channel messages (read/append)
+│   │   ├── messages        # Channel messages (read-only)
+│   │   ├── txt             # Send text messages
 │   │   ├── files/          # Shared documents
 │   │   └── media/          # Shared photos/videos
 │   └── tech_updates/
 │       ├── .info
 │       ├── messages
+│       ├── txt
 │       ├── files/
 │       └── media/
 ├── @alice -> users/alice   # Symlink for quick access (contacts only)
@@ -148,13 +157,16 @@ tg-fuse creates a virtual filesystem where Telegram contacts, groups, and channe
 
 **Files and directories:**
 - `.info` - Read-only file with entity details (username, name, bio, etc.)
-- `messages` - Read recent messages or send new ones (append-only)
+- `messages` - Read recent chat messages (read-only)
+- `txt` - Send text messages (write to send, read returns last sent message)
 - `files/` - Documents shared in the chat (downloadable; upload to send as document)
 - `media/` - Photos, videos and animations shared in the chat (downloadable; upload to send as compressed media)
 
 File names in `files/` and `media/` are prefixed with timestamps: `YYYYMMDD-HHMM-original_name.ext`
 
-**Symlinks:** `@<username>` at root and entries in `/contacts/` provide quick access to contact users.
+**Symlinks:**
+- `@<username>` at root and entries in `/contacts/` provide quick access to contact users
+- `/text/@<username>` provides quick access to txt files for sending messages
 
 ## Sending Files
 
@@ -183,6 +195,36 @@ cp announcement.txt /mnt/tg/channels/news/
 **Upload deduplication:** File hashes are cached, so sending the same file to multiple chats avoids re-uploading to Telegram servers.
 
 **File size limits:** 2 GB for regular users, 4 GB for Telegram Premium.
+
+## Sending Text Messages
+
+Use the `txt` file to send text messages:
+
+```bash
+# Simple message
+echo "Hello, world!" > /mnt/tg/users/alice/txt
+
+# Quick access via /text/ symlinks
+echo "Quick note" > /mnt/tg/text/@alice
+
+# Multi-line message
+cat << 'EOF' > /mnt/tg/text/@alice
+Meeting notes:
+- Discussed project timeline
+- Action items assigned
+EOF
+
+# Stream logs (useful for monitoring)
+tail -f /var/log/app.log > /mnt/tg/text/@alice
+```
+
+**Streaming behaviour:**
+- Small writes are buffered until 4096 bytes, then sent as a message
+- Messages are split at newline boundaries when possible
+- Rate limiting: minimum 1 second between sends to avoid Telegram flood protection
+- Buffer overflow protection: writes fail if buffer exceeds 40KB (prevents runaway streams)
+
+**Reading txt:** Returns the last sent message content.
 
 ## Platform Notes
 
