@@ -239,7 +239,8 @@ private:
     [[nodiscard]] std::string compute_file_hash(const std::string& path) const;
 
     /// Send file using cached remote file ID
-    void send_file_by_remote_id(
+    /// @return true on success, false if send failed (caller should re-upload)
+    bool send_file_by_remote_id(
         int64_t chat_id,
         const std::string& remote_file_id,
         const std::string& filename,

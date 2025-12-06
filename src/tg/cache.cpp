@@ -989,4 +989,26 @@ void CacheManager::cache_upload(const std::string& file_hash, int64_t file_size,
     spdlog::debug("Cached upload: hash={}, size={}, remote_id={}", file_hash.substr(0, 16), file_size, remote_file_id);
 }
 
+void CacheManager::invalidate_upload(const std::string& file_hash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const char* sql = "DELETE FROM upload_cache WHERE file_hash = ?";
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("Failed to prepare invalidate_upload statement");
+        return;
+    }
+
+    sqlite3_bind_text(stmt, 1, file_hash.c_str(), -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        spdlog::error("Failed to invalidate upload cache entry");
+    } else {
+        spdlog::debug("Invalidated upload cache: hash={}", file_hash.substr(0, 16));
+    }
+
+    sqlite3_finalize(stmt);
+}
+
 }  // namespace tg

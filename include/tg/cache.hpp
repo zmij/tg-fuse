@@ -83,6 +83,7 @@ public:
     // Upload deduplication cache
     std::optional<std::string> get_cached_upload(const std::string& file_hash);
     void cache_upload(const std::string& file_hash, int64_t file_size, const std::string& remote_file_id);
+    void invalidate_upload(const std::string& file_hash);
 
 private:
     void init_database();
