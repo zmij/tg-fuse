@@ -476,11 +476,17 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::USER_MESSAGES;
             } else if (components[2] == kFilesDir) {
                 info.category = PathCategory::USER_FILES_DIR;
+            } else if (components[2] == kMediaDir) {
+                info.category = PathCategory::USER_MEDIA_DIR;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
             info.file_entry_name = components[3];
             info.category = PathCategory::USER_FILE;
+        } else if (components.size() == 4 && components[2] == kMediaDir) {
+            info.entity_name = components[1];
+            info.file_entry_name = components[3];
+            info.category = PathCategory::USER_MEDIA;
         }
     } else if (components[0] == kContactsDir) {
         if (components.size() == 1) {
@@ -503,11 +509,17 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::GROUP_MESSAGES;
             } else if (components[2] == kFilesDir) {
                 info.category = PathCategory::GROUP_FILES_DIR;
+            } else if (components[2] == kMediaDir) {
+                info.category = PathCategory::GROUP_MEDIA_DIR;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
             info.file_entry_name = components[3];
             info.category = PathCategory::GROUP_FILE;
+        } else if (components.size() == 4 && components[2] == kMediaDir) {
+            info.entity_name = components[1];
+            info.file_entry_name = components[3];
+            info.category = PathCategory::GROUP_MEDIA;
         }
     } else if (components[0] == kChannelsDir) {
         if (components.size() == 1) {
@@ -523,11 +535,17 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::CHANNEL_MESSAGES;
             } else if (components[2] == kFilesDir) {
                 info.category = PathCategory::CHANNEL_FILES_DIR;
+            } else if (components[2] == kMediaDir) {
+                info.category = PathCategory::CHANNEL_MEDIA_DIR;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
             info.file_entry_name = components[3];
             info.category = PathCategory::CHANNEL_FILE;
+        } else if (components.size() == 4 && components[2] == kMediaDir) {
+            info.entity_name = components[1];
+            info.file_entry_name = components[3];
+            info.category = PathCategory::CHANNEL_MEDIA;
         }
     }
 
@@ -619,6 +637,15 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                     files_entry.ctime = files_entry.mtime;
                 }
                 entries.push_back(std::move(files_entry));
+
+                // media directory
+                auto media_entry = Entry::directory(std::string(kMediaDir));
+                if (user->last_message_timestamp > 0) {
+                    media_entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
+                    media_entry.atime = media_entry.mtime;
+                    media_entry.ctime = media_entry.mtime;
+                }
+                entries.push_back(std::move(media_entry));
             }
             break;
         }
@@ -664,6 +691,15 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                     files_entry.ctime = files_entry.mtime;
                 }
                 entries.push_back(std::move(files_entry));
+
+                // media directory
+                auto media_entry = Entry::directory(std::string(kMediaDir));
+                if (group->last_message_timestamp > 0) {
+                    media_entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                    media_entry.atime = media_entry.mtime;
+                    media_entry.ctime = media_entry.mtime;
+                }
+                entries.push_back(std::move(media_entry));
             }
             break;
         }
@@ -709,6 +745,15 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                     files_entry.ctime = files_entry.mtime;
                 }
                 entries.push_back(std::move(files_entry));
+
+                // media directory
+                auto media_entry = Entry::directory(std::string(kMediaDir));
+                if (channel->last_message_timestamp > 0) {
+                    media_entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
+                    media_entry.atime = media_entry.mtime;
+                    media_entry.ctime = media_entry.mtime;
+                }
+                entries.push_back(std::move(media_entry));
             }
             break;
         }
@@ -744,6 +789,51 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                 for (const auto& file : files) {
                     // Only show documents in files/ directory (not photos/videos)
                     if (!tg::is_document_type(file.type)) {
+                        continue;
+                    }
+                    auto entry = Entry::file(
+                        format_file_entry_name(file), static_cast<std::size_t>(file.file_size > 0 ? file.file_size : 0)
+                    );
+                    entry.mtime = static_cast<std::time_t>(file.timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                    entries.push_back(std::move(entry));
+                }
+            }
+            break;
+        }
+
+        case PathCategory::USER_MEDIA_DIR:
+        case PathCategory::GROUP_MEDIA_DIR:
+        case PathCategory::CHANNEL_MEDIA_DIR: {
+            // Get chat ID while holding lock
+            int64_t chat_id = 0;
+            if (info.category == PathCategory::USER_MEDIA_DIR) {
+                auto* user = find_user_by_dir_name(info.entity_name);
+                chat_id = user ? user->id : 0;
+            } else if (info.category == PathCategory::GROUP_MEDIA_DIR) {
+                auto* group = find_group_by_dir_name(info.entity_name);
+                chat_id = group ? group->id : 0;
+            } else {
+                auto* channel = find_channel_by_dir_name(info.entity_name);
+                chat_id = channel ? channel->id : 0;
+            }
+
+            if (chat_id != 0) {
+                // Get cached files
+                auto files = client_.cache().get_cached_file_list(chat_id);
+
+                // If no cached files, release lock and fetch from API
+                if (files.empty()) {
+                    lock.unlock();
+                    ensure_files_loaded(chat_id);
+                    lock.lock();
+                    files = client_.cache().get_cached_file_list(chat_id);
+                }
+
+                for (const auto& file : files) {
+                    // Only show media in media/ directory (photos/videos/animations)
+                    if (!tg::is_media_type(file.type)) {
                         continue;
                     }
                     auto entry = Entry::file(
@@ -1011,6 +1101,68 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
             break;
         }
 
+        case PathCategory::USER_MEDIA_DIR:
+        case PathCategory::GROUP_MEDIA_DIR:
+        case PathCategory::CHANNEL_MEDIA_DIR: {
+            // Verify the parent entity exists
+            bool exists = false;
+            if (info.category == PathCategory::USER_MEDIA_DIR) {
+                exists = find_user_by_dir_name(info.entity_name) != nullptr;
+            } else if (info.category == PathCategory::GROUP_MEDIA_DIR) {
+                exists = find_group_by_dir_name(info.entity_name) != nullptr;
+            } else {
+                exists = find_channel_by_dir_name(info.entity_name) != nullptr;
+            }
+            if (exists) {
+                return Entry::directory(std::string(kMediaDir));
+            }
+            break;
+        }
+
+        case PathCategory::USER_MEDIA:
+        case PathCategory::GROUP_MEDIA:
+        case PathCategory::CHANNEL_MEDIA: {
+            // Get chat ID while holding lock
+            int64_t chat_id = 0;
+            if (info.category == PathCategory::USER_MEDIA) {
+                auto* user = find_user_by_dir_name(info.entity_name);
+                chat_id = user ? user->id : 0;
+            } else if (info.category == PathCategory::GROUP_MEDIA) {
+                auto* group = find_group_by_dir_name(info.entity_name);
+                chat_id = group ? group->id : 0;
+            } else {
+                auto* channel = find_channel_by_dir_name(info.entity_name);
+                chat_id = channel ? channel->id : 0;
+            }
+
+            if (chat_id != 0) {
+                // Check cache first
+                auto files = client_.cache().get_cached_file_list(chat_id);
+                if (files.empty()) {
+                    // Release lock and fetch from API
+                    lock.unlock();
+                    ensure_files_loaded(chat_id);
+                    lock.lock();
+                    files = client_.cache().get_cached_file_list(chat_id);
+                }
+
+                // Find the file by entry name
+                auto* file = find_file_by_entry_name(chat_id, info.file_entry_name);
+                // Only return media (photos/videos/animations)
+                if (file && tg::is_media_type(file->type)) {
+                    auto entry = Entry::file(
+                        format_file_entry_name(*file),
+                        static_cast<std::size_t>(file->file_size > 0 ? file->file_size : 0)
+                    );
+                    entry.mtime = static_cast<std::time_t>(file->timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                    return entry;
+                }
+            }
+            break;
+        }
+
         default:
             break;
     }
@@ -1120,37 +1272,21 @@ FileContent TelegramDataProvider::read_file(std::string_view path) {
             content.readable = true;
         }
     } else if (is_file_path(info.category)) {
-        // Get chat ID
         int64_t chat_id = get_chat_id_for_files(info);
         if (chat_id != 0) {
-            // Ensure files are loaded
             ensure_files_loaded(chat_id);
-
-            // Find the file by entry name
             auto* file = find_file_by_entry_name(chat_id, info.file_entry_name);
-
-            // Only allow reading documents (not photos/videos)
             if (file && tg::is_document_type(file->type)) {
-                try {
-                    spdlog::debug("Downloading file {} (id: {}) for path {}", file->filename, file->file_id, path);
-
-                    // Download the file from Telegram
-                    auto local_path = client_.download_file(file->file_id).get_result();
-
-                    // Read the file content
-                    std::ifstream ifs(local_path, std::ios::binary);
-                    if (ifs) {
-                        std::ostringstream oss;
-                        oss << ifs.rdbuf();
-                        content.data = oss.str();
-                        content.readable = true;
-                        spdlog::debug("Read {} bytes from {}", content.data.size(), local_path);
-                    } else {
-                        spdlog::error("Failed to open downloaded file: {}", local_path);
-                    }
-                } catch (const std::exception& e) {
-                    spdlog::error("Failed to download file {}: {}", file->filename, e.what());
-                }
+                content = download_and_read_file(*file);
+            }
+        }
+    } else if (is_media_path(info.category)) {
+        int64_t chat_id = get_chat_id_for_files(info);
+        if (chat_id != 0) {
+            ensure_files_loaded(chat_id);
+            auto* file = find_file_by_entry_name(chat_id, info.file_entry_name);
+            if (file && tg::is_media_type(file->type)) {
+                content = download_and_read_file(*file);
             }
         }
     }
@@ -1232,6 +1368,16 @@ bool TelegramDataProvider::is_files_dir_path(PathCategory category) const {
 bool TelegramDataProvider::is_file_path(PathCategory category) const {
     return category == PathCategory::USER_FILE || category == PathCategory::GROUP_FILE ||
            category == PathCategory::CHANNEL_FILE;
+}
+
+bool TelegramDataProvider::is_media_dir_path(PathCategory category) const {
+    return category == PathCategory::USER_MEDIA_DIR || category == PathCategory::GROUP_MEDIA_DIR ||
+           category == PathCategory::CHANNEL_MEDIA_DIR;
+}
+
+bool TelegramDataProvider::is_media_path(PathCategory category) const {
+    return category == PathCategory::USER_MEDIA || category == PathCategory::GROUP_MEDIA ||
+           category == PathCategory::CHANNEL_MEDIA;
 }
 
 std::string TelegramDataProvider::format_file_entry_name(const tg::FileListItem& item) const {
@@ -1350,22 +1496,54 @@ void TelegramDataProvider::ensure_files_loaded(int64_t chat_id) {
     }
 }
 
+FileContent TelegramDataProvider::download_and_read_file(const tg::FileListItem& file) {
+    FileContent content;
+    content.readable = false;
+
+    try {
+        spdlog::debug("Downloading {} (id: {})", file.filename, file.file_id);
+
+        auto local_path = client_.download_file(file.file_id).get_result();
+
+        std::ifstream ifs(local_path, std::ios::binary);
+        if (ifs) {
+            std::ostringstream oss;
+            oss << ifs.rdbuf();
+            content.data = oss.str();
+            content.readable = true;
+            spdlog::debug("Read {} bytes from {}", content.data.size(), local_path);
+        } else {
+            spdlog::error("Failed to open downloaded file: {}", local_path);
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to download {}: {}", file.filename, e.what());
+    }
+
+    return content;
+}
+
 int64_t TelegramDataProvider::get_chat_id_for_files(const PathInfo& info) const {
     std::lock_guard<std::mutex> lock(mutex_);
 
     switch (info.category) {
         case PathCategory::USER_FILES_DIR:
-        case PathCategory::USER_FILE: {
+        case PathCategory::USER_FILE:
+        case PathCategory::USER_MEDIA_DIR:
+        case PathCategory::USER_MEDIA: {
             auto* user = find_user_by_dir_name(info.entity_name);
             return user ? user->id : 0;
         }
         case PathCategory::GROUP_FILES_DIR:
-        case PathCategory::GROUP_FILE: {
+        case PathCategory::GROUP_FILE:
+        case PathCategory::GROUP_MEDIA_DIR:
+        case PathCategory::GROUP_MEDIA: {
             auto* group = find_group_by_dir_name(info.entity_name);
             return group ? group->id : 0;
         }
         case PathCategory::CHANNEL_FILES_DIR:
-        case PathCategory::CHANNEL_FILE: {
+        case PathCategory::CHANNEL_FILE:
+        case PathCategory::CHANNEL_MEDIA_DIR:
+        case PathCategory::CHANNEL_MEDIA: {
             auto* channel = find_channel_by_dir_name(info.entity_name);
             return channel ? channel->id : 0;
         }

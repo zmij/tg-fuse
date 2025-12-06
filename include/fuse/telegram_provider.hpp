@@ -59,16 +59,22 @@ private:
         USER_MESSAGES,      // /users/alice/messages
         USER_FILES_DIR,     // /users/alice/files
         USER_FILE,          // /users/alice/files/20241205-1430-report.pdf
+        USER_MEDIA_DIR,     // /users/alice/media
+        USER_MEDIA,         // /users/alice/media/20241205-1430-photo.jpg
         GROUP_DIR,          // /groups/dev_chat
         GROUP_INFO,         // /groups/dev_chat/.info
         GROUP_MESSAGES,     // /groups/dev_chat/messages
         GROUP_FILES_DIR,    // /groups/dev_chat/files
         GROUP_FILE,         // /groups/dev_chat/files/...
+        GROUP_MEDIA_DIR,    // /groups/dev_chat/media
+        GROUP_MEDIA,        // /groups/dev_chat/media/...
         CHANNEL_DIR,        // /channels/news
         CHANNEL_INFO,       // /channels/news/.info
         CHANNEL_MESSAGES,   // /channels/news/messages
         CHANNEL_FILES_DIR,  // /channels/news/files
         CHANNEL_FILE,       // /channels/news/files/...
+        CHANNEL_MEDIA_DIR,  // /channels/news/media
+        CHANNEL_MEDIA,      // /channels/news/media/...
         CONTACT_SYMLINK,    // /contacts/alice
         ROOT_SYMLINK,       // /@alice
         SELF_SYMLINK        // /self
@@ -159,6 +165,12 @@ private:
     /// Check if a path category is a file entry
     [[nodiscard]] bool is_file_path(PathCategory category) const;
 
+    /// Check if a path category is a media directory
+    [[nodiscard]] bool is_media_dir_path(PathCategory category) const;
+
+    /// Check if a path category is a media entry
+    [[nodiscard]] bool is_media_path(PathCategory category) const;
+
     /// Estimate messages file size from cache
     [[nodiscard]] std::size_t estimate_messages_size(int64_t chat_id) const;
 
@@ -181,6 +193,9 @@ private:
 
     /// Send a message to a chat, handling large messages
     [[nodiscard]] WriteResult send_message(int64_t chat_id, const char* data, std::size_t size);
+
+    /// Download a file and read its content
+    [[nodiscard]] FileContent download_and_read_file(const tg::FileListItem& file);
 
     tg::TelegramClient& client_;
 
