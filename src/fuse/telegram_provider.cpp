@@ -486,6 +486,10 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::USER_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::USER_MEDIA_DIR;
+            } else {
+                // Unknown file in user directory - could be an upload
+                info.file_entry_name = components[2];
+                info.category = PathCategory::USER_UPLOAD;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
@@ -495,11 +499,6 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
             info.entity_name = components[1];
             info.file_entry_name = components[3];
             info.category = PathCategory::USER_MEDIA;
-        } else if (components.size() == 3) {
-            // Unknown file in user directory - could be an upload
-            info.entity_name = components[1];
-            info.file_entry_name = components[2];
-            info.category = PathCategory::USER_UPLOAD;
         }
     } else if (components[0] == kContactsDir) {
         if (components.size() == 1) {
@@ -524,6 +523,10 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::GROUP_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::GROUP_MEDIA_DIR;
+            } else {
+                // Unknown file in group directory - could be an upload
+                info.file_entry_name = components[2];
+                info.category = PathCategory::GROUP_UPLOAD;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
@@ -533,11 +536,6 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
             info.entity_name = components[1];
             info.file_entry_name = components[3];
             info.category = PathCategory::GROUP_MEDIA;
-        } else if (components.size() == 3) {
-            // Unknown file in group directory - could be an upload
-            info.entity_name = components[1];
-            info.file_entry_name = components[2];
-            info.category = PathCategory::GROUP_UPLOAD;
         }
     } else if (components[0] == kChannelsDir) {
         if (components.size() == 1) {
@@ -555,6 +553,10 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::CHANNEL_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::CHANNEL_MEDIA_DIR;
+            } else {
+                // Unknown file in channel directory - could be an upload
+                info.file_entry_name = components[2];
+                info.category = PathCategory::CHANNEL_UPLOAD;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
@@ -564,11 +566,6 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
             info.entity_name = components[1];
             info.file_entry_name = components[3];
             info.category = PathCategory::CHANNEL_MEDIA;
-        } else if (components.size() == 3) {
-            // Unknown file in channel directory - could be an upload
-            info.entity_name = components[1];
-            info.file_entry_name = components[2];
-            info.category = PathCategory::CHANNEL_UPLOAD;
         }
     }
 
