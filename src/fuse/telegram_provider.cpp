@@ -3,6 +3,7 @@
 #include "fuse/constants.hpp"
 #include "fuse/message_formatter.hpp"
 #include "tg/bustache_formatters.hpp"
+#include "tg/exceptions.hpp"
 #include "tg/formatters.hpp"
 
 #include <fmt/format.h>
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <set>
 #include <sstream>
+#include <thread>
 
 namespace tgfuse {
 
@@ -469,6 +471,24 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
         return info;
     }
 
+    // Check for /text directory
+    if (components[0] == kTextDir) {
+        if (components.size() == 1) {
+            info.category = PathCategory::TEXT_DIR;
+            return info;
+        }
+        if (components.size() == 2) {
+            info.category = PathCategory::TEXT_SYMLINK;
+            // Strip @ prefix if present
+            if (!components[1].empty() && components[1][0] == '@') {
+                info.entity_name = components[1].substr(1);
+            } else {
+                info.entity_name = components[1];
+            }
+            return info;
+        }
+    }
+
     // Check for top-level directories
     if (components[0] == kUsersDir) {
         if (components.size() == 1) {
@@ -486,6 +506,8 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::USER_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::USER_MEDIA_DIR;
+            } else if (components[2] == kTxtFile) {
+                info.category = PathCategory::USER_TXT;
             } else {
                 // Unknown file in user directory - could be an upload
                 info.file_entry_name = components[2];
@@ -523,6 +545,8 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::GROUP_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::GROUP_MEDIA_DIR;
+            } else if (components[2] == kTxtFile) {
+                info.category = PathCategory::GROUP_TXT;
             } else {
                 // Unknown file in group directory - could be an upload
                 info.file_entry_name = components[2];
@@ -553,6 +577,8 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::CHANNEL_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::CHANNEL_MEDIA_DIR;
+            } else if (components[2] == kTxtFile) {
+                info.category = PathCategory::CHANNEL_TXT;
             } else {
                 // Unknown file in channel directory - could be an upload
                 info.file_entry_name = components[2];
@@ -591,6 +617,7 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
             entries.push_back(Entry::directory(std::string(kGroupsDir)));
             entries.push_back(Entry::directory(std::string(kChannelsDir)));
             entries.push_back(Entry::directory(std::string(kUploadsDir)));
+            entries.push_back(Entry::directory(std::string(kTextDir)));
             // Self symlink pointing to current user's directory
             if (current_user_) {
                 auto dir_name = get_user_dir_name(*current_user_);
@@ -618,6 +645,16 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
             }
             break;
         }
+
+        case PathCategory::TEXT_DIR:
+            // Symlinks to txt files for all users with usernames
+            for (const auto& [name, user] : users_) {
+                if (has_username(user)) {
+                    auto target = (std::filesystem::path(kUsersDir) / name / kTxtFile).string();
+                    entries.push_back(Entry::symlink("@" + user.username, make_symlink_target(target)));
+                }
+            }
+            break;
 
         case PathCategory::USERS_DIR:
             for (const auto& [name, user] : users_) {
@@ -654,14 +691,23 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                 }
                 entries.push_back(std::move(info_entry));
 
-                // messages file (mode 0600 = owner read/write only)
-                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(user->id), 0600);
+                // messages file (mode 0400 = read-only)
+                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(user->id), 0400);
                 if (user->last_message_timestamp > 0) {
                     msg_entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
                     msg_entry.atime = msg_entry.mtime;
                     msg_entry.ctime = msg_entry.mtime;
                 }
                 entries.push_back(std::move(msg_entry));
+
+                // txt file for sending messages (mode 0600 = read/write)
+                auto txt_entry = Entry::file(std::string(kTxtFile), get_txt_file_size(user->id), 0600);
+                if (user->last_message_timestamp > 0) {
+                    txt_entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
+                    txt_entry.atime = txt_entry.mtime;
+                    txt_entry.ctime = txt_entry.mtime;
+                }
+                entries.push_back(std::move(txt_entry));
 
                 // files directory
                 auto files_entry = Entry::directory(std::string(kFilesDir));
@@ -711,14 +757,23 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                 }
                 entries.push_back(std::move(info_entry));
 
-                // messages file (mode 0600 = owner read/write only)
-                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(group->id), 0600);
+                // messages file (mode 0400 = read-only)
+                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(group->id), 0400);
                 if (group->last_message_timestamp > 0) {
                     msg_entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
                     msg_entry.atime = msg_entry.mtime;
                     msg_entry.ctime = msg_entry.mtime;
                 }
                 entries.push_back(std::move(msg_entry));
+
+                // txt file for sending messages (mode 0600 = read/write)
+                auto txt_entry = Entry::file(std::string(kTxtFile), get_txt_file_size(group->id), 0600);
+                if (group->last_message_timestamp > 0) {
+                    txt_entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                    txt_entry.atime = txt_entry.mtime;
+                    txt_entry.ctime = txt_entry.mtime;
+                }
+                entries.push_back(std::move(txt_entry));
 
                 // files directory
                 auto files_entry = Entry::directory(std::string(kFilesDir));
@@ -768,14 +823,23 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                 }
                 entries.push_back(std::move(info_entry));
 
-                // messages file (mode 0600 = owner read/write only)
-                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(channel->id), 0600);
+                // messages file (mode 0400 = read-only)
+                auto msg_entry = Entry::file(std::string(kMessagesFile), estimate_messages_size(channel->id), 0400);
                 if (channel->last_message_timestamp > 0) {
                     msg_entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
                     msg_entry.atime = msg_entry.mtime;
                     msg_entry.ctime = msg_entry.mtime;
                 }
                 entries.push_back(std::move(msg_entry));
+
+                // txt file for sending messages (mode 0600 = read/write)
+                auto txt_entry = Entry::file(std::string(kTxtFile), get_txt_file_size(channel->id), 0600);
+                if (channel->last_message_timestamp > 0) {
+                    txt_entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
+                    txt_entry.atime = txt_entry.mtime;
+                    txt_entry.ctime = txt_entry.mtime;
+                }
+                entries.push_back(std::move(txt_entry));
 
                 // files directory
                 auto files_entry = Entry::directory(std::string(kFilesDir));
@@ -932,6 +996,20 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
         case PathCategory::UPLOADS_DIR:
             return Entry::directory(std::string(kUploadsDir));
 
+        case PathCategory::TEXT_DIR:
+            return Entry::directory(std::string(kTextDir));
+
+        case PathCategory::TEXT_SYMLINK: {
+            // Symlink from /text/@username to /users/<dir_name>/txt
+            for (const auto& [dir_name, user] : users_) {
+                if (user.username == info.entity_name && is_user_contact(user)) {
+                    auto target = (std::filesystem::path(kUsersDir) / dir_name / kTxtFile).string();
+                    return Entry::symlink("@" + user.username, make_symlink_target(target));
+                }
+            }
+            break;
+        }
+
         case PathCategory::USER_DIR: {
             auto* user = find_user_by_dir_name(info.entity_name);
             if (user) {
@@ -1021,7 +1099,21 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
         case PathCategory::USER_MESSAGES: {
             auto* user = find_user_by_dir_name(info.entity_name);
             if (user) {
-                auto entry = Entry::file("messages", estimate_messages_size(user->id), 0600);
+                auto entry = Entry::file("messages", estimate_messages_size(user->id), 0400);
+                if (user->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                return entry;
+            }
+            break;
+        }
+
+        case PathCategory::USER_TXT: {
+            auto* user = find_user_by_dir_name(info.entity_name);
+            if (user) {
+                auto entry = Entry::file(std::string(kTxtFile), get_txt_file_size(user->id), 0600);
                 if (user->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(user->last_message_timestamp);
                     entry.atime = entry.mtime;
@@ -1035,7 +1127,21 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
         case PathCategory::GROUP_MESSAGES: {
             auto* group = find_group_by_dir_name(info.entity_name);
             if (group) {
-                auto entry = Entry::file("messages", estimate_messages_size(group->id), 0600);
+                auto entry = Entry::file("messages", estimate_messages_size(group->id), 0400);
+                if (group->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                return entry;
+            }
+            break;
+        }
+
+        case PathCategory::GROUP_TXT: {
+            auto* group = find_group_by_dir_name(info.entity_name);
+            if (group) {
+                auto entry = Entry::file(std::string(kTxtFile), get_txt_file_size(group->id), 0600);
                 if (group->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
                     entry.atime = entry.mtime;
@@ -1049,7 +1155,21 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
         case PathCategory::CHANNEL_MESSAGES: {
             auto* channel = find_channel_by_dir_name(info.entity_name);
             if (channel) {
-                auto entry = Entry::file("messages", estimate_messages_size(channel->id), 0600);
+                auto entry = Entry::file("messages", estimate_messages_size(channel->id), 0400);
+                if (channel->last_message_timestamp > 0) {
+                    entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
+                    entry.atime = entry.mtime;
+                    entry.ctime = entry.mtime;
+                }
+                return entry;
+            }
+            break;
+        }
+
+        case PathCategory::CHANNEL_TXT: {
+            auto* channel = find_channel_by_dir_name(info.entity_name);
+            if (channel) {
+                auto entry = Entry::file(std::string(kTxtFile), get_txt_file_size(channel->id), 0600);
                 if (channel->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
                     entry.atime = entry.mtime;
@@ -1363,6 +1483,19 @@ FileContent TelegramDataProvider::read_file(std::string_view path) {
                 content = download_and_read_file(*file);
             }
         }
+    } else if (is_txt_path(info.category)) {
+        int64_t chat_id = get_chat_id_for_txt(info);
+        if (chat_id != 0) {
+            std::lock_guard<std::mutex> lock(txt_states_mutex_);
+            auto it = txt_states_.find(chat_id);
+            if (it != txt_states_.end() && !it->second.last_sent_content.empty()) {
+                content.data = it->second.last_sent_content + "\n";
+                content.readable = true;
+            } else {
+                content.data = "";
+                content.readable = true;
+            }
+        }
     }
 
     return content;
@@ -1393,6 +1526,14 @@ std::string TelegramDataProvider::read_link(std::string_view path) {
             auto dir_name = get_user_dir_name(*current_user_);
             auto target = (std::filesystem::path(kUsersDir) / dir_name).string();
             return make_symlink_target(target);
+        }
+    } else if (info.category == PathCategory::TEXT_SYMLINK) {
+        // Symlink from /text/@username to /users/<dir_name>/txt
+        for (const auto& [dir_name, user] : users_) {
+            if (user.username == info.entity_name && is_user_contact(user)) {
+                auto target = (std::filesystem::path(kUsersDir) / dir_name / kTxtFile).string();
+                return make_symlink_target(target);
+            }
         }
     }
 
@@ -1842,7 +1983,7 @@ std::string TelegramDataProvider::format_and_cache_messages(int64_t chat_id, con
 
 bool TelegramDataProvider::is_writable(std::string_view path) const {
     auto info = parse_path(path);
-    return is_messages_path(info.category) || is_upload_path(info.category);
+    return is_txt_path(info.category) || is_upload_path(info.category);
 }
 
 bool TelegramDataProvider::is_upload_path(PathCategory category) const {
@@ -1852,20 +1993,37 @@ bool TelegramDataProvider::is_upload_path(PathCategory category) const {
 }
 
 bool TelegramDataProvider::is_append_only(std::string_view path) const {
-    return is_writable(path);  // All writable files are append-only
+    auto info = parse_path(path);
+    // txt files are NOT append-only - they support truncate + write
+    if (is_txt_path(info.category)) {
+        return false;
+    }
+    return is_writable(path);  // Other writable files are append-only
 }
 
 int TelegramDataProvider::truncate_file(std::string_view path, off_t size) {
     auto info = parse_path(path);
 
-    // Append-only files: only allow truncate to current size (no-op) or zero
-    if (is_messages_path(info.category)) {
+    // txt files: truncate clears the buffer
+    if (is_txt_path(info.category)) {
         if (size == 0) {
-            // Truncate to zero is allowed (it's a no-op for append-only)
+            int64_t chat_id = get_chat_id_for_txt(info);
+            if (chat_id != 0) {
+                std::lock_guard<std::mutex> lock(txt_states_mutex_);
+                auto it = txt_states_.find(chat_id);
+                if (it != txt_states_.end()) {
+                    it->second.buffer.clear();
+                }
+            }
             return 0;
         }
         // Other truncates are not permitted
         return -EPERM;
+    }
+
+    // messages file is now read-only
+    if (is_messages_path(info.category)) {
+        return -EACCES;
     }
 
     return -EACCES;  // Not writable
@@ -1874,44 +2032,17 @@ int TelegramDataProvider::truncate_file(std::string_view path, off_t size) {
 WriteResult TelegramDataProvider::write_file(std::string_view path, const char* data, std::size_t size, off_t offset) {
     auto info = parse_path(path);
 
-    if (!is_messages_path(info.category)) {
-        return WriteResult{false, 0, "Path is not writable"};
+    // txt file handling
+    if (is_txt_path(info.category)) {
+        return write_txt_file(info, data, size);
     }
 
-    int64_t chat_id = get_chat_id_from_path(info);
-    if (chat_id == 0) {
-        return WriteResult{false, 0, "Chat not found"};
+    // messages file is now read-only
+    if (is_messages_path(info.category)) {
+        return WriteResult{false, 0, "messages file is read-only, use txt instead"};
     }
 
-    // Get content size from the formatted messages cache
-    std::size_t current_size = messages_cache_->get_content_size(chat_id);
-    spdlog::debug("write_file: offset={}, size={}, cached_content_size={}", offset, size, current_size);
-
-    // If cache is empty (current_size == 0), treat all content as new
-    if (current_size == 0) {
-        spdlog::debug("write_file: no cached messages, sending all content");
-        return send_message(chat_id, data, size);
-    }
-
-    // If writing at offset 0 with size larger than current content,
-    // the shell likely read the file, appended new content, and wrote everything back.
-    // Extract just the new content beyond the current size.
-    if (offset == 0 && size > current_size) {
-        const char* new_content = data + current_size;
-        std::size_t new_size = size - current_size;
-        spdlog::debug("write_file: extracting new content at offset {}, size {}", current_size, new_size);
-        return send_message(chat_id, new_content, new_size);
-    }
-
-    // If offset is beyond current content, ignore (likely stale data)
-    if (static_cast<std::size_t>(offset) > current_size) {
-        spdlog::debug("write_file: ignoring write at offset {} beyond content size {}", offset, current_size);
-        return WriteResult{true, static_cast<int>(size), ""};
-    }
-
-    // Writing within existing content - ignore (it's a rewrite of existing messages)
-    spdlog::debug("write_file: ignoring write within existing content");
-    return WriteResult{true, static_cast<int>(size), ""};
+    return WriteResult{false, 0, "Path is not writable"};
 }
 
 WriteResult TelegramDataProvider::send_message(int64_t chat_id, const char* data, std::size_t size) {
@@ -2204,7 +2335,16 @@ TelegramDataProvider::write_file(std::string_view path, const char* data, std::s
 }
 
 int TelegramDataProvider::release_file(std::string_view path, uint64_t fh) {
-    (void)path;
+    // Handle txt file flush
+    auto info = parse_path(path);
+    if (is_txt_path(info.category)) {
+        int64_t chat_id = get_chat_id_for_txt(info);
+        if (chat_id != 0) {
+            std::lock_guard<std::mutex> lock(txt_states_mutex_);
+            process_txt_buffer(chat_id, true);  // Force flush remaining buffer
+        }
+        return 0;
+    }
 
     // Clean up old completed uploads periodically
     cleanup_completed_uploads();
@@ -2412,6 +2552,254 @@ void TelegramDataProvider::add_uploads_to_listing(std::string_view dir_path, std
             }
         }
     }
+}
+
+// ============================================================================
+// txt file helpers
+// ============================================================================
+
+bool TelegramDataProvider::is_txt_path(PathCategory category) const {
+    return category == PathCategory::USER_TXT || category == PathCategory::GROUP_TXT ||
+           category == PathCategory::CHANNEL_TXT;
+}
+
+int64_t TelegramDataProvider::get_chat_id_for_txt(const PathInfo& info) const {
+    switch (info.category) {
+        case PathCategory::USER_TXT: {
+            auto* user = find_user_by_dir_name(info.entity_name);
+            return user ? user->id : 0;
+        }
+        case PathCategory::GROUP_TXT: {
+            auto* group = find_group_by_dir_name(info.entity_name);
+            return group ? group->id : 0;
+        }
+        case PathCategory::CHANNEL_TXT: {
+            auto* channel = find_channel_by_dir_name(info.entity_name);
+            return channel ? channel->id : 0;
+        }
+        default:
+            return 0;
+    }
+}
+
+TelegramDataProvider::TxtWriteState& TelegramDataProvider::get_or_create_txt_state(int64_t chat_id) {
+    std::lock_guard<std::mutex> lock(txt_states_mutex_);
+    return txt_states_[chat_id];
+}
+
+std::size_t TelegramDataProvider::get_txt_file_size(int64_t chat_id) const {
+    std::lock_guard<std::mutex> lock(txt_states_mutex_);
+    auto it = txt_states_.find(chat_id);
+    if (it != txt_states_.end()) {
+        // Return size of last sent content (for reading back)
+        return it->second.last_sent_content.size() + (it->second.last_sent_content.empty() ? 0 : 1);
+    }
+    return 0;
+}
+
+std::size_t TelegramDataProvider::find_utf8_boundary(const std::string& str, std::size_t max_pos) const {
+    if (max_pos >= str.size()) {
+        return str.size();
+    }
+
+    // Walk backwards from max_pos to find a valid UTF-8 character boundary
+    std::size_t pos = max_pos;
+    while (pos > 0) {
+        unsigned char c = static_cast<unsigned char>(str[pos]);
+        // UTF-8 continuation bytes start with 10xxxxxx
+        if ((c & 0xC0) != 0x80) {
+            // Found start of a character or ASCII byte
+            return pos;
+        }
+        --pos;
+    }
+    return 0;
+}
+
+std::size_t TelegramDataProvider::process_txt_buffer(int64_t chat_id, bool force_flush) {
+    // Must be called with txt_states_mutex_ held
+    auto it = txt_states_.find(chat_id);
+    if (it == txt_states_.end()) {
+        return 0;
+    }
+
+    auto& state = it->second;
+    constexpr std::size_t kMaxChunkSize = 4096;
+    constexpr std::size_t kNewlineSearchWindow = 100;
+    constexpr auto kMinSendInterval = std::chrono::milliseconds(1000);  // 1 second between sends
+
+    // Only process if buffer is large enough or force_flush is true
+    if (state.buffer.size() < kMaxChunkSize && !force_flush) {
+        return 0;
+    }
+
+    if (state.buffer.empty()) {
+        return 0;
+    }
+
+    // Rate limit: wait if we sent too recently
+    auto now = std::chrono::steady_clock::now();
+    auto time_since_last_send = now - state.last_send_time;
+    if (state.last_send_time.time_since_epoch().count() > 0 && time_since_last_send < kMinSendInterval) {
+        auto wait_time = kMinSendInterval - time_since_last_send;
+        spdlog::debug(
+            "txt: Rate limiting - waiting {}ms before next send",
+            std::chrono::duration_cast<std::chrono::milliseconds>(wait_time).count()
+        );
+        std::this_thread::sleep_for(wait_time);
+    }
+
+    std::size_t bytes_consumed = 0;
+
+    while (!state.buffer.empty()) {
+        std::size_t chunk_end;
+
+        if (state.buffer.size() <= kMaxChunkSize) {
+            // Buffer is small enough - take all of it (only on force_flush)
+            if (!force_flush) {
+                break;
+            }
+            chunk_end = state.buffer.size();
+        } else {
+            // Find split point: prefer newline in last 100 bytes of 4096
+            chunk_end = kMaxChunkSize;
+
+            // Search for last newline in the window [kMaxChunkSize - kNewlineSearchWindow, kMaxChunkSize)
+            std::size_t search_start = kMaxChunkSize > kNewlineSearchWindow ? kMaxChunkSize - kNewlineSearchWindow : 0;
+            std::size_t last_newline = std::string::npos;
+
+            for (std::size_t i = search_start; i < kMaxChunkSize && i < state.buffer.size(); ++i) {
+                if (state.buffer[i] == '\n') {
+                    last_newline = i;
+                }
+            }
+
+            if (last_newline != std::string::npos) {
+                // Split after the newline
+                chunk_end = last_newline + 1;
+            } else {
+                // No newline found, split at UTF-8 boundary
+                chunk_end = find_utf8_boundary(state.buffer, kMaxChunkSize);
+            }
+        }
+
+        if (chunk_end == 0) {
+            // Safety: don't get stuck in infinite loop
+            break;
+        }
+
+        // Extract chunk and send
+        std::string chunk = state.buffer.substr(0, chunk_end);
+        state.buffer.erase(0, chunk_end);
+        bytes_consumed += chunk_end;
+
+        // Trim trailing newline for the message (Telegram doesn't need it)
+        while (!chunk.empty() && (chunk.back() == '\n' || chunk.back() == '\r')) {
+            chunk.pop_back();
+        }
+
+        if (chunk.empty()) {
+            continue;
+        }
+
+        // Send the message with rate limit handling
+        try {
+            spdlog::debug("txt: Sending {} bytes to chat {}", chunk.size(), chat_id);
+            auto task = client_.send_text(chat_id, chunk);
+            auto msg = task.get_result();
+
+            state.last_sent_content = chunk;
+            state.last_sent_message_id = msg.id;
+            state.last_send_time = std::chrono::steady_clock::now();
+
+            spdlog::info("txt: Sent message {} to chat {}", msg.id, chat_id);
+        } catch (const tg::RateLimitException& e) {
+            spdlog::warn("txt: Rate limit hit for chat {}: {}", chat_id, e.what());
+            // Put the chunk back in the buffer and stop
+            state.buffer = chunk + state.buffer;
+            bytes_consumed -= chunk_end;
+            // Signal rate limit to caller
+            throw;
+        } catch (const std::exception& e) {
+            spdlog::error("txt: Failed to send message to chat {}: {}", chat_id, e.what());
+            // Don't re-add to buffer - just log and continue
+        }
+
+        // If we're not force flushing and buffer is now small, stop
+        if (!force_flush && state.buffer.size() < kMaxChunkSize) {
+            break;
+        }
+
+        // Rate limit between multiple chunks
+        if (!state.buffer.empty()) {
+            std::this_thread::sleep_for(kMinSendInterval);
+        }
+    }
+
+    return bytes_consumed;
+}
+
+WriteResult TelegramDataProvider::write_txt_file(const PathInfo& info, const char* data, std::size_t size) {
+    int64_t chat_id = get_chat_id_for_txt(info);
+    if (chat_id == 0) {
+        return WriteResult{false, 0, "Chat not found"};
+    }
+
+    // Validate UTF-8
+    std::string_view input(data, size);
+    for (std::size_t i = 0; i < size;) {
+        unsigned char c = static_cast<unsigned char>(data[i]);
+        std::size_t char_len = 1;
+
+        if ((c & 0x80) == 0) {
+            // ASCII
+            char_len = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            char_len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            char_len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            char_len = 4;
+        } else {
+            return WriteResult{false, 0, "Invalid UTF-8 data"};
+        }
+
+        if (i + char_len > size) {
+            return WriteResult{false, 0, "Incomplete UTF-8 sequence"};
+        }
+
+        // Validate continuation bytes
+        for (std::size_t j = 1; j < char_len; ++j) {
+            if ((static_cast<unsigned char>(data[i + j]) & 0xC0) != 0x80) {
+                return WriteResult{false, 0, "Invalid UTF-8 continuation byte"};
+            }
+        }
+
+        i += char_len;
+    }
+
+    // Append to buffer and process
+    {
+        std::lock_guard<std::mutex> lock(txt_states_mutex_);
+        auto& state = txt_states_[chat_id];
+
+        // Check buffer limit before appending (rate limit protection)
+        if (state.buffer.size() + size > kTxtMaxBufferSize) {
+            spdlog::warn(
+                "txt buffer overflow for chat {}: {} + {} > {} bytes",
+                chat_id,
+                state.buffer.size(),
+                size,
+                kTxtMaxBufferSize
+            );
+            return WriteResult{false, 0, "Buffer full (rate limited), try again later"};
+        }
+
+        state.buffer.append(data, size);
+        process_txt_buffer(chat_id, false);
+    }
+
+    return WriteResult{true, static_cast<int>(size), ""};
 }
 
 }  // namespace tgfuse

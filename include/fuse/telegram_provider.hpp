@@ -86,9 +86,15 @@ private:
         SELF_SYMLINK,       // /self
         UPLOADS_DIR,        // /.uploads (lists pending uploads)
         // Upload categories (for cp operations)
-        USER_UPLOAD,    // /users/alice/newfile.txt (auto-detect)
-        GROUP_UPLOAD,   // /groups/chat/newfile.pdf (auto-detect)
-        CHANNEL_UPLOAD  // /channels/news/newfile.mp4 (auto-detect)
+        USER_UPLOAD,     // /users/alice/newfile.txt (auto-detect)
+        GROUP_UPLOAD,    // /groups/chat/newfile.pdf (auto-detect)
+        CHANNEL_UPLOAD,  // /channels/news/newfile.mp4 (auto-detect)
+        // txt file for sending text messages
+        USER_TXT,     // /users/alice/txt
+        GROUP_TXT,    // /groups/chat/txt
+        CHANNEL_TXT,  // /channels/news/txt
+        TEXT_DIR,     // /text
+        TEXT_SYMLINK  // /text/@alice
     };
 
     /// Parsed path information
@@ -300,6 +306,38 @@ private:
 
     /// Add pending and completed uploads to directory listing for a given directory path
     void add_uploads_to_listing(std::string_view dir_path, std::vector<Entry>& entries) const;
+
+    // txt file state for streaming writes
+    struct TxtWriteState {
+        std::string buffer;               // Write buffer for streaming
+        std::string last_sent_content;    // For reading back
+        int64_t last_sent_message_id{0};  // For future edit support
+        std::chrono::steady_clock::time_point last_send_time;
+    };
+    std::map<int64_t, TxtWriteState> txt_states_;
+    mutable std::mutex txt_states_mutex_;
+
+    /// Check if a path category is a txt file
+    [[nodiscard]] bool is_txt_path(PathCategory category) const;
+
+    /// Get chat ID for txt file operations
+    [[nodiscard]] int64_t get_chat_id_for_txt(const PathInfo& info) const;
+
+    /// Get or create txt state for a chat
+    [[nodiscard]] TxtWriteState& get_or_create_txt_state(int64_t chat_id);
+
+    /// Process txt buffer - send if >= 4096 bytes or force_flush is true
+    /// @return number of bytes consumed from buffer
+    std::size_t process_txt_buffer(int64_t chat_id, bool force_flush);
+
+    /// Find valid UTF-8 boundary at or before max_pos
+    [[nodiscard]] std::size_t find_utf8_boundary(const std::string& str, std::size_t max_pos) const;
+
+    /// Get txt file size (for getattr)
+    [[nodiscard]] std::size_t get_txt_file_size(int64_t chat_id) const;
+
+    /// Write to txt file (streaming buffer)
+    [[nodiscard]] WriteResult write_txt_file(const PathInfo& info, const char* data, std::size_t size);
 
     mutable std::mutex mutex_;
 
