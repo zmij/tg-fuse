@@ -445,6 +445,51 @@ public:
                 break;
             }
 
+            case td_api::updateMessageSendSucceeded::ID: {
+                auto send_update = td::move_tl_object_as<td_api::updateMessageSendSucceeded>(update);
+                int64_t old_msg_id = send_update->old_message_id_;
+                spdlog::debug(
+                    "updateMessageSendSucceeded: old_id={} new_id={}", old_msg_id, send_update->message_->id_
+                );
+
+                // Clean up temp file if we were tracking this message
+                {
+                    std::lock_guard<std::mutex> lock(pending_uploads_mutex_);
+                    auto it = pending_upload_files_.find(old_msg_id);
+                    if (it != pending_upload_files_.end()) {
+                        std::error_code ec;
+                        std::filesystem::remove(it->second, ec);
+                        spdlog::debug("Cleaned up temp file after upload: {}", it->second);
+                        pending_upload_files_.erase(it);
+                    }
+                }
+                break;
+            }
+
+            case td_api::updateMessageSendFailed::ID: {
+                auto fail_update = td::move_tl_object_as<td_api::updateMessageSendFailed>(update);
+                int64_t old_msg_id = fail_update->old_message_id_;
+                spdlog::warn(
+                    "updateMessageSendFailed: old_id={} error=[{}] {}",
+                    old_msg_id,
+                    fail_update->error_->code_,
+                    fail_update->error_->message_
+                );
+
+                // Clean up temp file on failure too
+                {
+                    std::lock_guard<std::mutex> lock(pending_uploads_mutex_);
+                    auto it = pending_upload_files_.find(old_msg_id);
+                    if (it != pending_upload_files_.end()) {
+                        std::error_code ec;
+                        std::filesystem::remove(it->second, ec);
+                        spdlog::debug("Cleaned up temp file after failed upload: {}", it->second);
+                        pending_upload_files_.erase(it);
+                    }
+                }
+                break;
+            }
+
             default:
                 spdlog::trace("Unhandled update: {}", update->get_id());
                 break;
@@ -850,6 +895,14 @@ public:
             auto msg_obj = td::move_tl_object_as<td_api::message>(response);
             auto message = convert_message(*msg_obj);
             cache_->cache_message(message);
+
+            // Register pending upload - file cleanup happens in updateMessageSendSucceeded
+            {
+                std::lock_guard<std::mutex> lock(pending_uploads_mutex_);
+                pending_upload_files_[message.id] = path;
+                spdlog::debug("Registered pending upload: msg_id={} path={}", message.id, path);
+            }
+
             return message;
         }
 
@@ -1125,6 +1178,10 @@ private:
     // Message callback
     std::function<void(const Message&)> message_callback_;
     std::mutex message_callback_mutex_;
+
+    // Pending upload files (message_id -> temp_file_path)
+    std::map<int64_t, std::string> pending_upload_files_;
+    std::mutex pending_uploads_mutex_;
 
 public:
     void set_message_callback(std::function<void(const Message&)> callback) {

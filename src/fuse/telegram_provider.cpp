@@ -2099,7 +2099,7 @@ std::string TelegramDataProvider::compute_file_hash(const std::string& path) con
     return fmt::format("{:016x}", hash);
 }
 
-void TelegramDataProvider::send_file_by_remote_id(
+bool TelegramDataProvider::send_file_by_remote_id(
     int64_t chat_id,
     const std::string& remote_file_id,
     const std::string& filename,
@@ -2109,8 +2109,10 @@ void TelegramDataProvider::send_file_by_remote_id(
         auto task = client_.send_file_by_id(chat_id, remote_file_id, filename, mode);
         task.get_result();
         spdlog::info("Sent cached file {} to chat {}", filename, chat_id);
+        return true;
     } catch (const std::exception& e) {
-        spdlog::error("Failed to send cached file: {}", e.what());
+        spdlog::warn("Failed to send cached file, will re-upload: {}", e.what());
+        return false;
     }
 }
 
@@ -2253,21 +2255,10 @@ int TelegramDataProvider::release_file(std::string_view path, uint64_t fh) {
         upload.mode = (detected == UploadAction::SEND_AS_MEDIA) ? tg::SendMode::MEDIA : tg::SendMode::DOCUMENT;
     }
 
-    // Compute hash for deduplication
-    std::string file_hash = compute_file_hash(upload.temp_path);
-
-    // Check upload cache
-    if (!file_hash.empty()) {
-        auto cached_id = client_.cache().get_cached_upload(file_hash);
-        if (cached_id) {
-            // Reuse existing upload
-            spdlog::info("Using cached upload for {}", upload.original_filename);
-            send_file_by_remote_id(upload.chat_id, *cached_id, upload.original_filename, upload.mode);
-            std::filesystem::remove(upload.temp_path, ec);
-            mark_upload_completed(virtual_path, upload.original_filename, file_size);
-            return 0;
-        }
-    }
+    // Note: Upload caching is disabled because TDLib's sendMessage returns before
+    // the upload completes, and the file_id in the returned message still references
+    // the local file. To implement caching properly, we'd need to track uploads and
+    // get the final remote file ID from updateMessageSendSucceeded.
 
     // Upload new file - rename to original filename so TDLib uses correct name
     auto upload_path = std::filesystem::path(upload.temp_path).parent_path() / upload.original_filename;
@@ -2297,18 +2288,19 @@ int TelegramDataProvider::release_file(std::string_view path, uint64_t fh) {
         auto task = client_.send_file(upload.chat_id, path_str, upload.mode);
         auto msg = task.get_result();
 
-        // Cache the remote file ID for future reuse
-        if (msg.media && !msg.media->file_id.empty() && !file_hash.empty()) {
-            client_.cache().cache_upload(file_hash, static_cast<int64_t>(file_size), msg.media->file_id);
-            spdlog::debug("Cached upload: hash={}, file_id={}", file_hash, msg.media->file_id);
-        }
+        // Note: Don't cache remote_file_id here - the upload may not be complete yet.
+        // TDLib uploads asynchronously; the file_id in the returned message may still
+        // reference the local file path. Caching is disabled until we have a proper
+        // way to get the final remote file ID after upload completes.
     } catch (const std::exception& e) {
         spdlog::error("Failed to send file: {}", e.what());
         std::filesystem::remove(upload_path, ec);
         return -EIO;
     }
 
-    std::filesystem::remove(upload_path, ec);
+    // Note: Do NOT delete the file here. TDLib uploads asynchronously and still
+    // needs access to the file. The TelegramClient will delete it when
+    // updateMessageSendSucceeded is received.
     mark_upload_completed(virtual_path, upload.original_filename, file_size);
     return 0;
 }
