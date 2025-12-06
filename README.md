@@ -149,12 +149,40 @@ tg-fuse creates a virtual filesystem where Telegram contacts, groups, and channe
 **Files and directories:**
 - `.info` - Read-only file with entity details (username, name, bio, etc.)
 - `messages` - Read recent messages or send new ones (append-only)
-- `files/` - Documents, audio, voice notes and stickers shared in the chat (read-only, downloaded on access)
-- `media/` - Photos, videos and animations (GIFs) shared in the chat (read-only, downloaded on access)
+- `files/` - Documents shared in the chat (downloadable; upload to send as document)
+- `media/` - Photos, videos and animations shared in the chat (downloadable; upload to send as compressed media)
 
 File names in `files/` and `media/` are prefixed with timestamps: `YYYYMMDD-HHMM-original_name.ext`
 
 **Symlinks:** `@<username>` at root and entries in `/contacts/` provide quick access to contact users.
+
+## Sending Files
+
+Copy files directly to chat directories to send them via Telegram:
+
+```bash
+# Auto-detect file type (recommended)
+cp photo.jpg /mnt/tg/users/alice/      # → sent as compressed photo
+cp document.pdf /mnt/tg/users/alice/   # → sent as document
+cp notes.txt /mnt/tg/users/alice/      # → sent as text message
+
+# Force specific type
+cp image.png /mnt/tg/users/alice/files/   # → sent as document (not compressed)
+cp video.mp4 /mnt/tg/users/alice/media/   # → sent as compressed media
+
+# Works with groups and channels too
+cp report.pdf /mnt/tg/groups/work/
+cp announcement.txt /mnt/tg/channels/news/
+```
+
+**Auto-detection rules:**
+- `.txt`, `.md` files with valid UTF-8 content → sent as text message (split if >4096 chars)
+- `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm` → sent as compressed media
+- All other files → sent as document
+
+**Upload deduplication:** File hashes are cached, so sending the same file to multiple chats reuses the upload.
+
+**File size limits:** 2 GB for regular users, 4 GB for Telegram Premium.
 
 ## Platform Notes
 
