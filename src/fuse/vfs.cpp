@@ -50,6 +50,11 @@ int VirtualFilesystem::mount(const VfsConfig& config) {
         args_storage.push_back("allow_other");
     }
 
+    // Disable kernel caching of directory entries and attributes
+    // This ensures ls shows fresh data when chats are updated
+    args_storage.push_back("-o");
+    args_storage.push_back("attr_timeout=0,entry_timeout=0,negative_timeout=0");
+
     // Convert to char* array
     for (auto& arg : args_storage) {
         argv.push_back(arg.data());

@@ -28,6 +28,12 @@ TelegramDataProvider::TelegramDataProvider(tg::TelegramClient& client)
       channels_loaded_(false),
       messages_cache_(std::make_unique<FormattedMessagesCache>()) {
     setup_message_callback();
+    setup_chat_callback();
+    setup_user_callback();
+
+    // Preload current user and trigger chat loading early
+    // This speeds up initial directory listings
+    preload_data();
 }
 
 void TelegramDataProvider::refresh_users() {
@@ -43,6 +49,15 @@ void TelegramDataProvider::refresh_users() {
         for (auto& user : users_list) {
             auto dir_name = get_user_dir_name(user);
             users_[dir_name] = std::move(user);
+        }
+
+        // Always include current user (self) in the users list
+        if (current_user_.has_value()) {
+            auto dir_name = get_user_dir_name(*current_user_);
+            if (users_.find(dir_name) == users_.end()) {
+                users_[dir_name] = *current_user_;
+                spdlog::debug("Added current user {} to users list", dir_name);
+            }
         }
 
         // Only mark as fully loaded if we got some users
@@ -79,11 +94,33 @@ void TelegramDataProvider::ensure_current_user_loaded() {
         auto me_task = client_.get_me();
         auto me = me_task.get_result();
 
-        std::lock_guard<std::mutex> lock(mutex_);
-        current_user_ = std::move(me);
-        spdlog::debug("Loaded current user: {}", current_user_->display_name());
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            current_user_ = std::move(me);
+            spdlog::debug("Loaded current user: {}", current_user_->display_name());
+        }
+
+        // Invalidate users cache so current user gets added on next refresh
+        users_loaded_ = false;
     } catch (const std::exception& e) {
         spdlog::error("Failed to get current user: {}", e.what());
+    }
+}
+
+void TelegramDataProvider::preload_data() {
+    spdlog::info("Preloading Telegram data...");
+
+    // Load current user first (for self symlink and adding to users list)
+    ensure_current_user_loaded();
+
+    // Trigger TDLib to send updateNewChat events for all chats
+    // This populates the cache much faster than waiting for individual updates
+    try {
+        auto preload_task = client_.preload_chats(1000);
+        preload_task.get_result();
+        spdlog::info("Chat preloading complete");
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to preload chats: {}", e.what());
     }
 }
 
@@ -1943,6 +1980,46 @@ void TelegramDataProvider::setup_message_callback() {
         // Invalidate TLRU cache for this chat (forces reformat on next read)
         messages_cache_->invalidate(message.chat_id);
         spdlog::debug("New message {} for chat {}, cache invalidated", message.id, message.chat_id);
+    });
+}
+
+void TelegramDataProvider::setup_chat_callback() {
+    client_.set_chat_callback([this](const tg::Chat& chat) {
+        // Invalidate the appropriate cache based on chat type
+        switch (chat.type) {
+            case tg::ChatType::PRIVATE:
+                // Private chats show up in users list, invalidate users cache
+                users_loaded_ = false;
+                spdlog::debug("New private chat {}, users cache invalidated", chat.id);
+                break;
+            case tg::ChatType::GROUP:
+            case tg::ChatType::SUPERGROUP:
+                groups_loaded_ = false;
+                spdlog::debug("New group/supergroup {}, groups cache invalidated", chat.id);
+                break;
+            case tg::ChatType::CHANNEL:
+                channels_loaded_ = false;
+                spdlog::debug("New channel {}, channels cache invalidated", chat.id);
+                break;
+        }
+    });
+}
+
+void TelegramDataProvider::setup_user_callback() {
+    client_.set_user_callback([this](const tg::User& user) {
+        // Check if this is the current user (self) - update current_user_ if IDs match
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (current_user_.has_value() && current_user_->id == user.id) {
+                current_user_ = user;
+                spdlog::debug("Updated current user info: {}", user.display_name());
+            }
+        }
+
+        // Invalidate users cache when we get new user info
+        // This ensures we pick up new contacts and the current user
+        users_loaded_ = false;
+        spdlog::debug("User {} updated, users cache invalidated", user.id);
     });
 }
 
