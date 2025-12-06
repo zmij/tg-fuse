@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 
 namespace tgfuse {
@@ -1117,6 +1118,40 @@ FileContent TelegramDataProvider::read_file(std::string_view path) {
         if (chat_id != 0) {
             content.data = fetch_and_format_messages(chat_id);
             content.readable = true;
+        }
+    } else if (is_file_path(info.category)) {
+        // Get chat ID
+        int64_t chat_id = get_chat_id_for_files(info);
+        if (chat_id != 0) {
+            // Ensure files are loaded
+            ensure_files_loaded(chat_id);
+
+            // Find the file by entry name
+            auto* file = find_file_by_entry_name(chat_id, info.file_entry_name);
+
+            // Only allow reading documents (not photos/videos)
+            if (file && tg::is_document_type(file->type)) {
+                try {
+                    spdlog::debug("Downloading file {} (id: {}) for path {}", file->filename, file->file_id, path);
+
+                    // Download the file from Telegram
+                    auto local_path = client_.download_file(file->file_id).get_result();
+
+                    // Read the file content
+                    std::ifstream ifs(local_path, std::ios::binary);
+                    if (ifs) {
+                        std::ostringstream oss;
+                        oss << ifs.rdbuf();
+                        content.data = oss.str();
+                        content.readable = true;
+                        spdlog::debug("Read {} bytes from {}", content.data.size(), local_path);
+                    } else {
+                        spdlog::error("Failed to open downloaded file: {}", local_path);
+                    }
+                } catch (const std::exception& e) {
+                    spdlog::error("Failed to download file {}: {}", file->filename, e.what());
+                }
+            }
         }
     }
 

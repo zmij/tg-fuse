@@ -114,7 +114,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
             if (!photo.photo_->sizes_.empty()) {
                 auto& largest = photo.photo_->sizes_.back();
                 info.type = MediaType::PHOTO;
-                info.file_id = std::to_string(largest->photo_->id_);
+                info.file_id = largest->photo_->remote_->id_;
                 info.filename = "photo.jpg";
                 info.mime_type = "image/jpeg";
                 info.file_size = largest->photo_->size_;
@@ -127,7 +127,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageVideo::ID: {
             auto& video = static_cast<const td_api::messageVideo&>(content);
             info.type = MediaType::VIDEO;
-            info.file_id = std::to_string(video.video_->video_->id_);
+            info.file_id = video.video_->video_->remote_->id_;
             info.filename = video.video_->file_name_;
             info.mime_type = video.video_->mime_type_;
             info.file_size = video.video_->video_->size_;
@@ -140,7 +140,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageDocument::ID: {
             auto& doc = static_cast<const td_api::messageDocument&>(content);
             info.type = MediaType::DOCUMENT;
-            info.file_id = std::to_string(doc.document_->document_->id_);
+            info.file_id = doc.document_->document_->remote_->id_;
             info.filename = doc.document_->file_name_;
             info.mime_type = doc.document_->mime_type_;
             info.file_size = doc.document_->document_->size_;
@@ -150,7 +150,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageAudio::ID: {
             auto& audio = static_cast<const td_api::messageAudio&>(content);
             info.type = MediaType::AUDIO;
-            info.file_id = std::to_string(audio.audio_->audio_->id_);
+            info.file_id = audio.audio_->audio_->remote_->id_;
             info.filename = audio.audio_->file_name_;
             info.mime_type = audio.audio_->mime_type_;
             info.file_size = audio.audio_->audio_->size_;
@@ -161,7 +161,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageVoiceNote::ID: {
             auto& voice = static_cast<const td_api::messageVoiceNote&>(content);
             info.type = MediaType::VOICE;
-            info.file_id = std::to_string(voice.voice_note_->voice_->id_);
+            info.file_id = voice.voice_note_->voice_->remote_->id_;
             info.filename = "voice.ogg";
             info.mime_type = voice.voice_note_->mime_type_;
             info.file_size = voice.voice_note_->voice_->size_;
@@ -172,7 +172,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageAnimation::ID: {
             auto& anim = static_cast<const td_api::messageAnimation&>(content);
             info.type = MediaType::ANIMATION;
-            info.file_id = std::to_string(anim.animation_->animation_->id_);
+            info.file_id = anim.animation_->animation_->remote_->id_;
             info.filename = anim.animation_->file_name_;
             info.mime_type = anim.animation_->mime_type_;
             info.file_size = anim.animation_->animation_->size_;
@@ -939,16 +939,18 @@ public:
         return "";
     }
 
-    // Download file
-    std::string download_file_sync(int32_t file_id, const std::string& destination_path) {
-        // First, get the file info
-        auto file_response = send_query_sync(td_api::make_object<td_api::getFile>(file_id));
+    // Download file using remote file ID (persistent string)
+    std::string download_file_sync(const std::string& remote_file_id, const std::string& destination_path) {
+        // First, get the file info using remote ID
+        auto file_response =
+            send_query_sync(td_api::make_object<td_api::getRemoteFile>(remote_file_id, nullptr));
 
         if (file_response->get_id() != td_api::file::ID) {
-            throw FileNotFoundException(std::to_string(file_id));
+            throw FileNotFoundException(remote_file_id);
         }
 
         auto file_obj = td::move_tl_object_as<td_api::file>(file_response);
+        int32_t local_file_id = file_obj->id_;
 
         // Check if already downloaded
         if (file_obj->local_->is_downloading_completed_) {
@@ -963,20 +965,20 @@ public:
             return destination_path;
         }
 
-        // Download the file
+        // Download the file using local file ID
         auto download_response = send_query_sync(
-            td_api::make_object<td_api::downloadFile>(file_id, 32, 0, 0, true),
-            30000  // 30 second timeout for downloads
+            td_api::make_object<td_api::downloadFile>(local_file_id, 32, 0, 0, true),
+            120000  // 2 minute timeout for downloads
         );
 
         if (download_response->get_id() != td_api::file::ID) {
-            throw FileDownloadException(std::to_string(file_id));
+            throw FileDownloadException(remote_file_id);
         }
 
         auto downloaded_file = td::move_tl_object_as<td_api::file>(download_response);
 
         if (!downloaded_file->local_->is_downloading_completed_) {
-            throw FileDownloadException(std::to_string(file_id));
+            throw FileDownloadException(remote_file_id);
         }
 
         std::string source_path = downloaded_file->local_->path_;
@@ -1178,12 +1180,7 @@ Task<std::vector<FileListItem>> TelegramClient::list_files(int64_t chat_id) {
 }
 
 Task<std::string> TelegramClient::download_file(const std::string& file_id, const std::string& destination_path) {
-    try {
-        int32_t file_id_int = std::stoi(file_id);
-        co_return impl_->download_file_sync(file_id_int, destination_path);
-    } catch (const std::exception& e) {
-        throw FileNotFoundException(file_id);
-    }
+    co_return impl_->download_file_sync(file_id, destination_path);
 }
 
 Task<ChatStatus> TelegramClient::get_chat_status(int64_t chat_id) {
