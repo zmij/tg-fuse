@@ -14,5 +14,6 @@ inline constexpr std::string_view kMessagesFile = "messages";
 inline constexpr std::string_view kFilesDir = "files";
 inline constexpr std::string_view kMediaDir = "media";
 inline constexpr std::string_view kSelfSymlink = "self";
+inline constexpr std::string_view kUploadsDir = ".uploads";
 
 }  // namespace tgfuse

@@ -42,6 +42,12 @@ public:
     [[nodiscard]] bool is_writable(std::string_view path) const override;
     [[nodiscard]] bool is_append_only(std::string_view path) const override;
 
+    // File upload operations
+    int create_file(std::string_view path, mode_t mode, uint64_t& fh) override;
+    WriteResult
+    write_file(std::string_view path, const char* data, std::size_t size, off_t offset, uint64_t fh) override;
+    int release_file(std::string_view path, uint64_t fh) override;
+
     /// Refresh user cache from Telegram
     void refresh_users();
 
@@ -77,7 +83,12 @@ private:
         CHANNEL_MEDIA,      // /channels/news/media/...
         CONTACT_SYMLINK,    // /contacts/alice
         ROOT_SYMLINK,       // /@alice
-        SELF_SYMLINK        // /self
+        SELF_SYMLINK,       // /self
+        UPLOADS_DIR,        // /.uploads (lists pending uploads)
+        // Upload categories (for cp operations)
+        USER_UPLOAD,    // /users/alice/newfile.txt (auto-detect)
+        GROUP_UPLOAD,   // /groups/chat/newfile.pdf (auto-detect)
+        CHANNEL_UPLOAD  // /channels/news/newfile.mp4 (auto-detect)
     };
 
     /// Parsed path information
@@ -197,6 +208,44 @@ private:
     /// Download a file and read its content
     [[nodiscard]] FileContent download_and_read_file(const tg::FileListItem& file);
 
+    /// Check if a path category is an upload target
+    [[nodiscard]] bool is_upload_path(PathCategory category) const;
+
+    /// Get chat ID for upload operations
+    [[nodiscard]] int64_t get_chat_id_for_upload(const PathInfo& info) const;
+
+    /// Check if a file extension is valid for media/ directory
+    [[nodiscard]] bool is_valid_media_extension(const std::string& filename) const;
+
+    /// Extract original filename (strip timestamp prefix if present)
+    [[nodiscard]] std::string extract_original_filename(const std::string& entry_name) const;
+
+    /// Get temp directory for uploads
+    [[nodiscard]] std::filesystem::path get_upload_temp_dir() const;
+
+    /// Action to take when uploading a file
+    enum class UploadAction { SEND_AS_TEXT, SEND_AS_MEDIA, SEND_AS_DOCUMENT };
+
+    /// Detect upload action based on file content/extension
+    [[nodiscard]] UploadAction detect_upload_action(const std::string& path, const std::string& filename) const;
+
+    /// Check if file contains valid UTF-8 text
+    [[nodiscard]] bool is_valid_text_file(const std::string& path) const;
+
+    /// Send file content as text message(s)
+    [[nodiscard]] int send_file_as_text(int64_t chat_id, const std::string& path);
+
+    /// Compute SHA256 hash of a file
+    [[nodiscard]] std::string compute_file_hash(const std::string& path) const;
+
+    /// Send file using cached remote file ID
+    void send_file_by_remote_id(
+        int64_t chat_id,
+        const std::string& remote_file_id,
+        const std::string& filename,
+        tg::SendMode mode
+    );
+
     tg::TelegramClient& client_;
 
     // Cached user data (keyed by directory name)
@@ -214,6 +263,42 @@ private:
 
     // Formatted messages cache (RCU-style, updated on message notifications)
     std::unique_ptr<FormattedMessagesCache> messages_cache_;
+
+    // Pending file upload tracking
+    struct PendingUpload {
+        std::string temp_path;
+        std::string original_filename;
+        std::string virtual_path;  // Full virtual path for getattr lookups
+        int64_t chat_id;
+        tg::SendMode mode;
+        std::size_t bytes_written{0};
+    };
+    std::map<uint64_t, PendingUpload> pending_uploads_;
+    mutable std::mutex uploads_mutex_;
+    std::atomic<uint64_t> next_upload_handle_{1};
+
+    // Recently completed uploads (kept briefly for post-release operations like setxattr)
+    struct CompletedUpload {
+        std::string filename;
+        std::size_t size;
+        std::chrono::steady_clock::time_point completed_at;
+    };
+    std::map<std::string, CompletedUpload> completed_uploads_;  // keyed by virtual_path
+
+    /// Find a pending upload by virtual path
+    [[nodiscard]] const PendingUpload* find_pending_upload_by_path(std::string_view path) const;
+
+    /// Find a recently completed upload by virtual path
+    [[nodiscard]] const CompletedUpload* find_completed_upload_by_path(std::string_view path) const;
+
+    /// Mark an upload as completed (moves from pending to completed)
+    void mark_upload_completed(const std::string& virtual_path, const std::string& filename, std::size_t size);
+
+    /// Clean up old completed uploads (called periodically)
+    void cleanup_completed_uploads();
+
+    /// Add pending and completed uploads to directory listing for a given directory path
+    void add_uploads_to_listing(std::string_view dir_path, std::vector<Entry>& entries) const;
 
     mutable std::mutex mutex_;
 

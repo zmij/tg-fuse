@@ -162,6 +162,45 @@ public:
         return false;
     }
 
+    // File upload operations (for cp to virtual filesystem)
+
+    /// Create a file for writing (called by FUSE create callback)
+    /// @param path Absolute path to the file
+    /// @param mode File mode
+    /// @param fh Output file handle for tracking the upload
+    /// @return 0 on success, negative errno on error
+    virtual int create_file(std::string_view path, mode_t mode, uint64_t& fh) {
+        (void)path;
+        (void)mode;
+        (void)fh;
+        return -EACCES;  // Default: not supported
+    }
+
+    /// Write to an open file using file handle
+    /// @param path Absolute path to the file
+    /// @param data Data to write
+    /// @param size Size of data
+    /// @param offset Write offset
+    /// @param fh File handle from create_file
+    /// @return WriteResult with status
+    virtual WriteResult
+    write_file(std::string_view path, const char* data, std::size_t size, off_t offset, uint64_t fh) {
+        // Default implementation delegates to the simpler write_file
+        (void)fh;
+        return write_file(path, data, size, offset);
+    }
+
+    /// Release (close) a file after writing (called by FUSE release callback)
+    /// This is where uploaded files are actually sent to Telegram
+    /// @param path Absolute path to the file
+    /// @param fh File handle from create_file
+    /// @return 0 on success, negative errno on error
+    virtual int release_file(std::string_view path, uint64_t fh) {
+        (void)path;
+        (void)fh;
+        return 0;  // Default: no-op
+    }
+
     // Metadata
 
     /// Get filesystem name
