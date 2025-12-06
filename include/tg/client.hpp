@@ -76,6 +76,9 @@ public:
 
     // File operations
     Task<Message> send_file(int64_t chat_id, const std::string& path, SendMode mode = SendMode::AUTO);
+    /// Send file with hash for upload deduplication cache
+    Task<Message>
+    send_file(int64_t chat_id, const std::string& path, SendMode mode, const std::string& file_hash, int64_t file_size);
     Task<Message>
     send_file_by_id(int64_t chat_id, const std::string& remote_file_id, const std::string& filename, SendMode mode);
     Task<std::vector<FileListItem>> list_media(int64_t chat_id);
