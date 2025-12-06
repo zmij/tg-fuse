@@ -84,6 +84,7 @@ struct Chat {
     std::string username;  // For public groups/channels (without @ or #)
     int64_t last_message_id;
     int64_t last_message_timestamp;
+    bool can_send_messages{true};  // Whether current user can send messages to this chat
 
     // Helper to get directory name for VFS
     std::string get_directory_name() const;

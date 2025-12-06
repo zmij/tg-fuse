@@ -224,6 +224,11 @@ Chat convert_chat(const td_api::chat& chat) {
         result.last_message_timestamp = chat.last_message_->date_;
     }
 
+    // Extract permissions - check if user can send basic messages
+    if (chat.permissions_) {
+        result.can_send_messages = chat.permissions_->can_send_basic_messages_;
+    }
+
     // Extract username if available
     // Note: TDLib doesn't directly provide username in chat object,
     // we'll need to get it from the user/supergroup info
