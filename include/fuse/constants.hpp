@@ -12,6 +12,7 @@ inline constexpr std::string_view kChannelsDir = "channels";
 inline constexpr std::string_view kInfoFile = ".info";
 inline constexpr std::string_view kMessagesFile = "messages";
 inline constexpr std::string_view kFilesDir = "files";
+inline constexpr std::string_view kMediaDir = "media";
 inline constexpr std::string_view kSelfSymlink = "self";
 
 }  // namespace tgfuse
