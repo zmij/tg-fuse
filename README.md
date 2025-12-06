@@ -104,35 +104,55 @@ tg-fuse creates a virtual filesystem where Telegram contacts, groups, and channe
 ├── users/
 │   ├── alice/              # User directory
 │   │   ├── .info           # User information (read-only)
-│   │   └── messages        # Chat messages (read/append)
+│   │   ├── messages        # Chat messages (read/append)
+│   │   ├── files/          # Shared documents (read-only)
+│   │   │   ├── 20241205-1430-report.pdf
+│   │   │   └── 20241206-0900-notes.docx
+│   │   └── media/          # Shared photos/videos (read-only)
+│   │       ├── 20241205-1445-photo.jpg
+│   │       └── 20241206-1200-video.mp4
 │   └── bob/
 │       ├── .info
-│       └── messages
+│       ├── messages
+│       ├── files/
+│       └── media/
 ├── contacts/
 │   ├── alice -> ../users/alice   # Symlinks to contact users
 │   └── bob -> ../users/bob
 ├── groups/
 │   ├── family/             # Group directory
 │   │   ├── .info           # Group information
-│   │   └── messages        # Group messages (read/append)
+│   │   ├── messages        # Group messages (read/append)
+│   │   ├── files/          # Shared documents
+│   │   └── media/          # Shared photos/videos
 │   └── work/
 │       ├── .info
-│       └── messages
+│       ├── messages
+│       ├── files/
+│       └── media/
 ├── channels/
 │   ├── news_channel/       # Channel directory
 │   │   ├── .info           # Channel information
-│   │   └── messages        # Channel messages (read/append)
+│   │   ├── messages        # Channel messages (read/append)
+│   │   ├── files/          # Shared documents
+│   │   └── media/          # Shared photos/videos
 │   └── tech_updates/
 │       ├── .info
-│       └── messages
+│       ├── messages
+│       ├── files/
+│       └── media/
 ├── @alice -> users/alice   # Symlink for quick access (contacts only)
 ├── @bob -> users/bob
 └── ...
 ```
 
-**Files:**
+**Files and directories:**
 - `.info` - Read-only file with entity details (username, name, bio, etc.)
 - `messages` - Read recent messages or send new ones (append-only)
+- `files/` - Documents, audio, voice notes and stickers shared in the chat (read-only, downloaded on access)
+- `media/` - Photos, videos and animations (GIFs) shared in the chat (read-only, downloaded on access)
+
+File names in `files/` and `media/` are prefixed with timestamps: `YYYYMMDD-HHMM-original_name.ext`
 
 **Symlinks:** `@<username>` at root and entries in `/contacts/` provide quick access to contact users.
 
