@@ -100,6 +100,75 @@ public:
     /// @param size New file size
     /// @return 0 on success, negative errno on error
     virtual int truncate(const char* path, off_t size) = 0;
+
+    /// Create and open a file
+    /// @param path Path to the file to create
+    /// @param mode File mode bits
+    /// @param fi File info (fh field can be set)
+    /// @return 0 on success, negative errno on error
+    virtual int create(const char* path, mode_t mode, struct fuse_file_info* fi) = 0;
+
+    /// Change file permissions
+    /// @param path Path to the file
+    /// @param mode New mode bits
+    /// @return 0 on success, negative errno on error
+    virtual int chmod(const char* path, mode_t mode) = 0;
+
+    /// Change file ownership (stub - always succeeds for virtual fs)
+    /// @param path Path to the file
+    /// @param uid New owner uid
+    /// @param gid New owner gid
+    /// @return 0 on success, negative errno on error
+    virtual int chown(const char* path, uid_t uid, gid_t gid) = 0;
+
+    /// Change file timestamps (stub - always succeeds for virtual fs)
+    /// @param path Path to the file
+    /// @param ts New timestamps (atime, mtime)
+    /// @return 0 on success, negative errno on error
+    virtual int utimens(const char* path, const struct timespec ts[2]) = 0;
+
+#ifdef __APPLE__
+    /// Set extended attribute (macOS - stub returns ENOTSUP)
+    /// @param path Path to the file
+    /// @param name Attribute name
+    /// @param value Attribute value
+    /// @param size Value size
+    /// @param flags Flags
+    /// @param position Position (macOS specific)
+    /// @return 0 on success, negative errno on error
+    virtual int
+    setxattr(const char* path, const char* name, const char* value, size_t size, int flags, uint32_t position) = 0;
+
+    /// Get extended attribute (macOS - stub returns ENOTSUP)
+    virtual int getxattr(const char* path, const char* name, char* value, size_t size, uint32_t position) = 0;
+
+    /// List extended attributes (macOS - stub returns ENOTSUP)
+    virtual int listxattr(const char* path, char* list, size_t size) = 0;
+
+    /// Change file flags (macOS - used by cp for file flags like locked, hidden)
+    /// @param path Path to the file
+    /// @param flags BSD file flags (UF_HIDDEN, UF_IMMUTABLE, etc.)
+    /// @return 0 on success, negative errno on error
+    virtual int chflags(const char* path, uint32_t flags) = 0;
+
+    /// Set extended attributes (macOS - combines chmod, chown, utimens, chflags, truncate)
+    /// @param path Path to the file
+    /// @param attr Structure containing attributes to set
+    /// @return 0 on success, negative errno on error
+    virtual int setattr_x(const char* path, struct setattr_x* attr) = 0;
+
+    /// Set extended attributes with file handle (macOS)
+    virtual int fsetattr_x(const char* path, struct setattr_x* attr, struct fuse_file_info* fi) = 0;
+#else
+    /// Set extended attribute (Linux)
+    virtual int setxattr(const char* path, const char* name, const char* value, size_t size, int flags) = 0;
+
+    /// Get extended attribute (Linux)
+    virtual int getxattr(const char* path, const char* name, char* value, size_t size) = 0;
+
+    /// List extended attributes (Linux)
+    virtual int listxattr(const char* path, char* list, size_t size) = 0;
+#endif
 };
 
 /// Platform-specific adapter that wraps FuseOperations
