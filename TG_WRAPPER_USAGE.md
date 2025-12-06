@@ -9,6 +9,7 @@ The TG wrapper provides a modern C++20 coroutine-based interface to TDLib with:
 - **Coroutine-based async API** for clean, sequential code
 - **Type-safe structures** for users, chats, messages, and files
 - **Exception-based error handling**
+- **Upload deduplication** via file hash caching
 
 ## Quick Start
 
@@ -25,6 +26,7 @@ int main() {
     config.api_hash = "your_api_hash";
     config.database_directory = "/tmp/tg-data";
     config.files_directory = "/tmp/tg-files";
+    config.logs_directory = "/tmp/tg-logs";  // Optional TDLib log directory
 
     // Create the client
     tg::TelegramClient client(config);
@@ -122,6 +124,10 @@ Task<void> read_messages_example(tg::TelegramClient& client, int64_t chat_id) {
     for (const auto& msg : messages) {
         spdlog::info("{}", msg.format_for_display());
     }
+
+    // Fetch messages until at least 50, or 7 days old
+    auto more_messages = co_await client.get_messages_until(
+        chat_id, 50, std::chrono::seconds(7 * 24 * 3600));
 }
 ```
 
@@ -140,10 +146,40 @@ Task<void> send_file_example(tg::TelegramClient& client, int64_t chat_id) {
                                               tg::SendMode::DOCUMENT);
 
     spdlog::info("File sent as document {}", doc_msg.id);
+
+    // Send with hash for upload deduplication
+    std::string file_hash = "sha256_hash_of_file";
+    int64_t file_size = 12345;
+    auto cached_msg = co_await client.send_file(chat_id, "/path/to/file.pdf",
+                                                 tg::SendMode::DOCUMENT,
+                                                 file_hash, file_size);
 }
 ```
 
-### 7. Listing Files/Media
+### 7. Reusing Uploads (Deduplication)
+
+```cpp
+Task<void> send_cached_file_example(tg::TelegramClient& client, int64_t chat_id) {
+    // Check cache for existing upload
+    std::string file_hash = compute_file_hash("/path/to/file.pdf");
+    auto cached_id = client.cache().get_cached_upload(file_hash);
+
+    if (cached_id) {
+        // Reuse existing upload - avoids re-uploading to Telegram servers
+        auto msg = co_await client.send_file_by_id(
+            chat_id, *cached_id, "file.pdf", tg::SendMode::DOCUMENT);
+        spdlog::info("Sent cached file as message {}", msg.id);
+    } else {
+        // Upload new file
+        auto msg = co_await client.send_file(chat_id, "/path/to/file.pdf",
+                                              tg::SendMode::DOCUMENT,
+                                              file_hash, file_size);
+        // Cache will be populated automatically on upload success
+    }
+}
+```
+
+### 8. Listing Files/Media
 
 ```cpp
 Task<void> list_media_example(tg::TelegramClient& client, int64_t chat_id) {
@@ -170,7 +206,7 @@ Task<void> list_media_example(tg::TelegramClient& client, int64_t chat_id) {
 }
 ```
 
-### 8. Downloading Files
+### 9. Downloading Files
 
 ```cpp
 Task<void> download_file_example(tg::TelegramClient& client,
@@ -188,7 +224,7 @@ Task<void> download_file_example(tg::TelegramClient& client,
 }
 ```
 
-### 9. Using the Cache
+### 10. Using the Cache
 
 ```cpp
 void cache_example(tg::TelegramClient& client) {
@@ -206,6 +242,10 @@ void cache_example(tg::TelegramClient& client) {
 
     spdlog::info("Cached {} users", users.size());
 
+    // Upload deduplication cache
+    auto remote_id = cache.get_cached_upload("file_hash_here");
+    cache.cache_upload("file_hash", 12345, "remote_file_id");
+
     // Invalidate cache for a specific chat
     cache.invalidate_chat_messages(123456789);
 
@@ -214,7 +254,7 @@ void cache_example(tg::TelegramClient& client) {
 }
 ```
 
-### 10. Error Handling
+### 11. Error Handling
 
 ```cpp
 Task<void> error_handling_example(tg::TelegramClient& client) {
@@ -240,32 +280,41 @@ Task<void> error_handling_example(tg::TelegramClient& client) {
 }
 ```
 
-## VFS Integration Example
-
-Here's how the wrapper will be used in the FUSE filesystem:
+### 12. Message Callbacks
 
 ```cpp
-// In FUSE readdir handler for root "/"
-Task<void> vfs_list_chats(tg::TelegramClient& client, std::vector<std::string>& entries) {
-    auto chats = co_await client.get_all_chats();
+void callback_example(tg::TelegramClient& client) {
+    // Register callback for new messages
+    client.set_message_callback([](const tg::Message& msg) {
+        spdlog::info("New message in chat {}: {}", msg.chat_id, msg.text);
+    });
+}
+```
 
-    for (const auto& chat : chats) {
+## VFS Integration Example
+
+Here's how the wrapper is used in the FUSE filesystem:
+
+```cpp
+// In FUSE readdir handler for "/users/"
+Task<void> vfs_list_users(tg::TelegramClient& client, std::vector<std::string>& entries) {
+    auto users = co_await client.get_users();
+
+    for (const auto& user : users) {
         // Add directory name to FUSE listing
-        entries.push_back(chat.get_directory_name());
+        entries.push_back(user.get_identifier());
     }
-
-    // Add special .meta directory
-    entries.push_back(".meta");
 }
 
-// In FUSE readdir handler for "/@alice/"
+// In FUSE readdir handler for "/users/alice/"
 void vfs_list_chat_dirs(std::vector<std::string>& entries) {
+    entries.push_back(".info");
     entries.push_back("messages");
     entries.push_back("media");
     entries.push_back("files");
 }
 
-// In FUSE read handler for "/@alice/messages"
+// In FUSE read handler for "/users/alice/messages"
 Task<std::string> vfs_read_messages(tg::TelegramClient& client,
                                      int64_t chat_id,
                                      int count) {
@@ -279,7 +328,7 @@ Task<std::string> vfs_read_messages(tg::TelegramClient& client,
     co_return oss.str();
 }
 
-// In FUSE write handler for "/@alice/messages"
+// In FUSE write handler for "/users/alice/messages"
 Task<void> vfs_write_message(tg::TelegramClient& client,
                               int64_t chat_id,
                               const std::string& text) {
@@ -288,26 +337,19 @@ Task<void> vfs_write_message(tg::TelegramClient& client,
     spdlog::info("Message sent: {}", msg.id);
 }
 
-// In FUSE readdir handler for "/@alice/media"
+// In FUSE readdir handler for "/users/alice/media"
 Task<void> vfs_list_media(tg::TelegramClient& client,
                           int64_t chat_id,
                           std::vector<std::string>& entries) {
     auto items = co_await client.list_media(chat_id);
 
-    for (size_t i = 0; i < items.size(); ++i) {
-        // Create virtual filename with index
-        std::string ext = items[i].filename;
-        auto pos = ext.find_last_of('.');
-        if (pos != std::string::npos) {
-            ext = ext.substr(pos);
-        }
-
-        std::string virtual_name = std::to_string(i) + "_" + items[i].filename;
-        entries.push_back(virtual_name);
+    for (const auto& item : items) {
+        // Filename includes timestamp prefix: YYYYMMDD-HHMM-original.ext
+        entries.push_back(item.filename);
     }
 }
 
-// In FUSE write handler for copying file to "/@alice/media/newfile.jpg"
+// In FUSE write handler for copying file to "/users/alice/media/newfile.jpg"
 Task<void> vfs_send_file(tg::TelegramClient& client,
                          int64_t chat_id,
                          const std::string& source_path,
@@ -331,8 +373,8 @@ struct User {
     std::string last_name;
     std::string phone_number;
     bool is_contact;
-    int64_t last_message_id;
-    int64_t last_message_timestamp;
+    UserStatus status;
+    int64_t last_seen;
 
     std::string display_name() const;      // "John Doe"
     std::string get_identifier() const;    // "@johndoe" or name
@@ -346,10 +388,8 @@ struct Chat {
     ChatType type;                // PRIVATE, GROUP, SUPERGROUP, CHANNEL
     std::string title;
     std::string username;         // For public groups/channels
-    int64_t last_message_id;
-    int64_t last_message_timestamp;
 
-    std::string get_directory_name() const;  // "@username" or "#group" or ID
+    std::string get_directory_name() const;  // username or sanitised title
     bool is_private() const;
     bool is_group() const;
     bool is_channel() const;
@@ -393,7 +433,7 @@ struct MediaInfo {
 ```cpp
 struct FileListItem {
     int64_t message_id;
-    std::string filename;
+    std::string filename;         // With YYYYMMDD-HHMM- timestamp prefix
     int64_t file_size;
     int64_t timestamp;
     MediaType type;
@@ -447,33 +487,37 @@ Task<void> example_workflow(tg::TelegramClient& client) {
             spdlog::info("Authentication required");
         }
 
-        // 2. List all chats
+        // 2. Get current user
+        auto me = co_await client.get_me();
+        spdlog::info("Logged in as: {}", me.display_name());
+
+        // 3. List all chats
         auto chats = co_await client.get_all_chats();
         spdlog::info("Found {} chats", chats.size());
 
-        // 3. Find a specific user
+        // 4. Find a specific user
         auto alice_chat = co_await client.resolve_username("alice");
 
         if (alice_chat) {
-            // 4. Send a message
+            // 5. Send a message
             auto msg = co_await client.send_text(alice_chat->id,
                                                   "Hello from C++20!");
 
-            // 5. Read recent messages
+            // 6. Read recent messages
             auto messages = co_await client.get_last_n_messages(alice_chat->id, 5);
 
             for (const auto& m : messages) {
                 spdlog::info("{}", m.format_for_display());
             }
 
-            // 6. Send a file
+            // 7. Send a file
             auto file_msg = co_await client.send_file(alice_chat->id,
                                                        "/tmp/photo.jpg",
                                                        tg::SendMode::MEDIA);
 
             spdlog::info("Photo sent: {}", file_msg.id);
 
-            // 7. List media
+            // 8. List media
             auto media = co_await client.list_media(alice_chat->id);
 
             spdlog::info("Found {} media items", media.size());
@@ -519,16 +563,5 @@ int main() {
 - **Coroutines**: All async methods return `Task<T>` that can be `co_await`ed
 - **Persistence**: Cache survives application restarts
 - **TDLib Updates**: The client automatically processes TDLib updates in background
-- **Memory**: Large file lists are streamed, not loaded entirely into memory
-
-## Future Work
-
-The following methods are currently stubs and need full implementation:
-- Entity listing (get_users, get_groups, get_channels, get_all_chats)
-- Entity lookup (resolve_username, get_chat, get_user)
-- Messaging (send_text, get_messages)
-- File operations (send_file, list_media, list_files, download_file)
-- Chat status polling (get_chat_status)
-- Logout functionality
-
-These will be implemented in subsequent iterations with full TDLib integration.
+- **Upload Deduplication**: File hashes are cached to avoid re-uploading identical files
+- **Async Uploads**: File uploads happen asynchronously; `cp` completes when data is written to temp file
