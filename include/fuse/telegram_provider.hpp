@@ -6,12 +6,14 @@
 #include "tg/types.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace tgfuse {
@@ -24,7 +26,7 @@ namespace tgfuse {
 class TelegramDataProvider : public DataProvider {
 public:
     explicit TelegramDataProvider(tg::TelegramClient& client);
-    ~TelegramDataProvider() override = default;
+    ~TelegramDataProvider() override;
 
     // DataProvider interface implementation
     [[nodiscard]] std::vector<Entry> list_directory(std::string_view path) override;
@@ -313,9 +315,25 @@ private:
         std::string last_sent_content;    // For reading back
         int64_t last_sent_message_id{0};  // For future edit support
         std::chrono::steady_clock::time_point last_send_time;
+        std::chrono::steady_clock::time_point last_write_time;  // For timeout-based flushing
     };
     std::map<int64_t, TxtWriteState> txt_states_;
     mutable std::mutex txt_states_mutex_;
+
+    // Background flusher for txt buffers (flushes after write timeout)
+    std::thread txt_flusher_thread_;
+    std::atomic<bool> txt_flusher_running_{false};
+    std::condition_variable txt_flusher_cv_;
+    mutable std::mutex txt_flusher_mutex_;
+
+    /// Start the background txt buffer flusher thread
+    void start_txt_flusher();
+
+    /// Stop the background txt buffer flusher thread
+    void stop_txt_flusher();
+
+    /// Background flusher thread function
+    void txt_flusher_loop();
 
     /// Check if a path category is a txt file
     [[nodiscard]] bool is_txt_path(PathCategory category) const;
