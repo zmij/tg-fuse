@@ -7,6 +7,10 @@
 
 namespace tg {
 
+// Telegram file size limits
+inline constexpr int64_t kMaxFileSizeRegular = 2LL * 1024 * 1024 * 1024;  // 2 GB
+inline constexpr int64_t kMaxFileSizePremium = 4LL * 1024 * 1024 * 1024;  // 4 GB
+
 // Forward declarations
 struct User;
 struct Chat;

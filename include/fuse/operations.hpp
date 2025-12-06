@@ -28,6 +28,23 @@ public:
     int release(const char* path, struct fuse_file_info* fi) override;
     int write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi) override;
     int truncate(const char* path, off_t size) override;
+    int create(const char* path, mode_t mode, struct fuse_file_info* fi) override;
+    int chmod(const char* path, mode_t mode) override;
+    int chown(const char* path, uid_t uid, gid_t gid) override;
+    int utimens(const char* path, const struct timespec ts[2]) override;
+#ifdef __APPLE__
+    int
+    setxattr(const char* path, const char* name, const char* value, size_t size, int flags, uint32_t position) override;
+    int getxattr(const char* path, const char* name, char* value, size_t size, uint32_t position) override;
+    int listxattr(const char* path, char* list, size_t size) override;
+    int chflags(const char* path, uint32_t flags) override;
+    int setattr_x(const char* path, struct setattr_x* attr) override;
+    int fsetattr_x(const char* path, struct setattr_x* attr, struct fuse_file_info* fi) override;
+#else
+    int setxattr(const char* path, const char* name, const char* value, size_t size, int flags) override;
+    int getxattr(const char* path, const char* name, char* value, size_t size) override;
+    int listxattr(const char* path, char* list, size_t size) override;
+#endif
 
 private:
     std::shared_ptr<DataProvider> provider_;
