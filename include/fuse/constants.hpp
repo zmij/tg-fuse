@@ -22,4 +22,8 @@ inline constexpr std::string_view kTextDir = "text";
 // Telegram message limit is 4096 bytes, so ~10 messages worth = 40KB
 inline constexpr std::size_t kTxtMaxBufferSize = 40 * 1024;  // 40KB max buffer
 
+// txt file flush timeout for streaming writes (e.g., tail -f | grep > txt)
+// After this many milliseconds of no writes, flush the buffer
+inline constexpr int kTxtFlushTimeoutMs = 2000;  // 2 seconds
+
 }  // namespace tgfuse

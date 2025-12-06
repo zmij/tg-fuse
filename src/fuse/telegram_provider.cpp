@@ -34,7 +34,12 @@ TelegramDataProvider::TelegramDataProvider(tg::TelegramClient& client)
     // Preload current user and trigger chat loading early
     // This speeds up initial directory listings
     preload_data();
+
+    // Start background flusher for txt buffers
+    start_txt_flusher();
 }
+
+TelegramDataProvider::~TelegramDataProvider() { stop_txt_flusher(); }
 
 void TelegramDataProvider::refresh_users() {
     try {
@@ -2879,10 +2884,80 @@ WriteResult TelegramDataProvider::write_txt_file(const PathInfo& info, const cha
         }
 
         state.buffer.append(data, size);
+        state.last_write_time = std::chrono::steady_clock::now();
         process_txt_buffer(chat_id, false);
     }
 
+    // Notify the flusher thread that there's new data
+    txt_flusher_cv_.notify_one();
+
     return WriteResult{true, static_cast<int>(size), ""};
+}
+
+void TelegramDataProvider::start_txt_flusher() {
+    txt_flusher_running_ = true;
+    txt_flusher_thread_ = std::thread(&TelegramDataProvider::txt_flusher_loop, this);
+    spdlog::debug("Started txt buffer flusher thread");
+}
+
+void TelegramDataProvider::stop_txt_flusher() {
+    if (txt_flusher_running_) {
+        txt_flusher_running_ = false;
+        txt_flusher_cv_.notify_all();
+        if (txt_flusher_thread_.joinable()) {
+            txt_flusher_thread_.join();
+        }
+        spdlog::debug("Stopped txt buffer flusher thread");
+    }
+}
+
+void TelegramDataProvider::txt_flusher_loop() {
+    while (txt_flusher_running_) {
+        // Wait for notification or timeout
+        {
+            std::unique_lock<std::mutex> lock(txt_flusher_mutex_);
+            txt_flusher_cv_.wait_for(lock, std::chrono::milliseconds(kTxtFlushTimeoutMs / 2));
+        }
+
+        if (!txt_flusher_running_) {
+            break;
+        }
+
+        // Check for stale buffers that need flushing
+        auto now = std::chrono::steady_clock::now();
+        std::vector<int64_t> chats_to_flush;
+
+        {
+            std::lock_guard<std::mutex> lock(txt_states_mutex_);
+            for (auto& [chat_id, state] : txt_states_) {
+                if (!state.buffer.empty()) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - state.last_write_time);
+                    if (elapsed.count() >= kTxtFlushTimeoutMs) {
+                        chats_to_flush.push_back(chat_id);
+                    }
+                }
+            }
+        }
+
+        // Flush stale buffers (outside the lock to avoid blocking writes)
+        for (int64_t chat_id : chats_to_flush) {
+            std::lock_guard<std::mutex> lock(txt_states_mutex_);
+            auto it = txt_states_.find(chat_id);
+            if (it != txt_states_.end() && !it->second.buffer.empty()) {
+                spdlog::debug("Flushing stale txt buffer for chat {} ({} bytes)", chat_id, it->second.buffer.size());
+                process_txt_buffer(chat_id, true);
+            }
+        }
+    }
+
+    // Final flush of all remaining buffers on shutdown
+    std::lock_guard<std::mutex> lock(txt_states_mutex_);
+    for (auto& [chat_id, state] : txt_states_) {
+        if (!state.buffer.empty()) {
+            spdlog::debug("Final flush of txt buffer for chat {} ({} bytes)", chat_id, state.buffer.size());
+            process_txt_buffer(chat_id, true);
+        }
+    }
 }
 
 }  // namespace tgfuse
