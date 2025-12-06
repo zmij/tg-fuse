@@ -46,7 +46,7 @@ brew install macfuse cmake
 #   2. Reboot if required
 
 # Clone and build
-git clone https://github.com/yourusername/tg-fuse
+git clone https://github.com/zmij/tg-fuse
 cd tg-fuse
 make build-release
 cd build/release
@@ -180,8 +180,6 @@ cp announcement.txt /mnt/tg/channels/news/
 - `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm` → sent as compressed media
 - All other files → sent as document
 
-**Upload deduplication:** File hashes are cached, so sending the same file to multiple chats reuses the upload.
-
 **File size limits:** 2 GB for regular users, 4 GB for Telegram Premium.
 
 ## Platform Notes
@@ -218,7 +216,7 @@ Built with modern C++20 and conditional compilation for cross-platform FUSE supp
 Contributions are welcome! The build system is simple:
 
 ```bash
-git clone https://github.com/yourusername/tg-fuse
+git clone https://github.com/zmij/tg-fuse
 cd tg-fuse
 make build-debug        # Build with debug symbols
 make format             # Format code before committing
