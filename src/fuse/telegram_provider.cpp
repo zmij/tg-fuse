@@ -766,14 +766,16 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                 }
                 entries.push_back(std::move(msg_entry));
 
-                // txt file for sending messages (mode 0600 = read/write)
-                auto txt_entry = Entry::file(std::string(kTxtFile), get_txt_file_size(group->id), 0600);
-                if (group->last_message_timestamp > 0) {
-                    txt_entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
-                    txt_entry.atime = txt_entry.mtime;
-                    txt_entry.ctime = txt_entry.mtime;
+                // txt file for sending messages (only if user can send messages)
+                if (group->can_send_messages) {
+                    auto txt_entry = Entry::file(std::string(kTxtFile), get_txt_file_size(group->id), 0600);
+                    if (group->last_message_timestamp > 0) {
+                        txt_entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
+                        txt_entry.atime = txt_entry.mtime;
+                        txt_entry.ctime = txt_entry.mtime;
+                    }
+                    entries.push_back(std::move(txt_entry));
                 }
-                entries.push_back(std::move(txt_entry));
 
                 // files directory
                 auto files_entry = Entry::directory(std::string(kFilesDir));
@@ -832,14 +834,16 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                 }
                 entries.push_back(std::move(msg_entry));
 
-                // txt file for sending messages (mode 0600 = read/write)
-                auto txt_entry = Entry::file(std::string(kTxtFile), get_txt_file_size(channel->id), 0600);
-                if (channel->last_message_timestamp > 0) {
-                    txt_entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
-                    txt_entry.atime = txt_entry.mtime;
-                    txt_entry.ctime = txt_entry.mtime;
+                // txt file for sending messages (only if user can send messages)
+                if (channel->can_send_messages) {
+                    auto txt_entry = Entry::file(std::string(kTxtFile), get_txt_file_size(channel->id), 0600);
+                    if (channel->last_message_timestamp > 0) {
+                        txt_entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
+                        txt_entry.atime = txt_entry.mtime;
+                        txt_entry.ctime = txt_entry.mtime;
+                    }
+                    entries.push_back(std::move(txt_entry));
                 }
-                entries.push_back(std::move(txt_entry));
 
                 // files directory
                 auto files_entry = Entry::directory(std::string(kFilesDir));
@@ -1140,7 +1144,8 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
 
         case PathCategory::GROUP_TXT: {
             auto* group = find_group_by_dir_name(info.entity_name);
-            if (group) {
+            // Only expose txt if user can send messages
+            if (group && group->can_send_messages) {
                 auto entry = Entry::file(std::string(kTxtFile), get_txt_file_size(group->id), 0600);
                 if (group->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(group->last_message_timestamp);
@@ -1168,7 +1173,8 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
 
         case PathCategory::CHANNEL_TXT: {
             auto* channel = find_channel_by_dir_name(info.entity_name);
-            if (channel) {
+            // Only expose txt if user can send messages
+            if (channel && channel->can_send_messages) {
                 auto entry = Entry::file(std::string(kTxtFile), get_txt_file_size(channel->id), 0600);
                 if (channel->last_message_timestamp > 0) {
                     entry.mtime = static_cast<std::time_t>(channel->last_message_timestamp);
