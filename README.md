@@ -180,6 +180,8 @@ cp announcement.txt /mnt/tg/channels/news/
 - `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm` → sent as compressed media
 - All other files → sent as document
 
+**Upload deduplication:** File hashes are cached, so sending the same file to multiple chats avoids re-uploading to Telegram servers.
+
 **File size limits:** 2 GB for regular users, 4 GB for Telegram Premium.
 
 ## Platform Notes
