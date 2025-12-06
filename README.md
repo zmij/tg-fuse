@@ -10,14 +10,14 @@ cp vacation_photos.zip /mnt/tg/@friend_username
 echo "Running late, be there in 10!" > /mnt/tg/@friend_username/text
 
 # Send to a group chat
-cp presentation.pdf /mnt/tg/#work_group
+cp presentation.pdf /mnt/tg/groups/work_group
 ```
 
 ## Features
 
 - **Native filesystem integration** - Use standard Unix tools (`cp`, `mv`, `rsync`, etc.) to send files
 - **Cross-platform** - Works on Linux (libfuse) and macOS (osxfuse/macFUSE)
-- **Multiple chat types** - Send to users (`@username`), groups (`#groupname`), or channels (by ID)
+- **Multiple chat types** - Send to users (`@username`), groups, and channels
 - **Automatic file type detection** - Photos, documents, videos handled appropriately
 - **Contact management** - Username resolution and caching
 - **Secure authentication** - OAuth-based login flow via companion CLI tool
