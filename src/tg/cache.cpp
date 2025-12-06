@@ -84,6 +84,7 @@ void CacheManager::create_tables() {
             username TEXT,
             last_message_id INTEGER,
             last_message_timestamp INTEGER,
+            can_send_messages INTEGER DEFAULT 1,
             updated_at INTEGER DEFAULT (strftime('%s', 'now'))
         );
 
@@ -276,8 +277,8 @@ void CacheManager::cache_chat(const Chat& chat) {
 
     const char* sql = R"(
         INSERT OR REPLACE INTO chats
-        (id, type, title, username, last_message_id, last_message_timestamp, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+        (id, type, title, username, last_message_id, last_message_timestamp, can_send_messages, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
     )";
 
     sqlite3_stmt* stmt;
@@ -291,6 +292,7 @@ void CacheManager::cache_chat(const Chat& chat) {
     sqlite3_bind_text(stmt, 4, chat.username.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 5, chat.last_message_id);
     sqlite3_bind_int64(stmt, 6, chat.last_message_timestamp);
+    sqlite3_bind_int(stmt, 7, chat.can_send_messages ? 1 : 0);
 
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         sqlite3_finalize(stmt);
@@ -320,6 +322,7 @@ std::optional<Chat> CacheManager::get_cached_chat(int64_t id) {
         chat.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         chat.last_message_id = sqlite3_column_int64(stmt, 4);
         chat.last_message_timestamp = sqlite3_column_int64(stmt, 5);
+        chat.can_send_messages = sqlite3_column_int(stmt, 6) != 0;
 
         sqlite3_finalize(stmt);
         return chat;
@@ -349,6 +352,7 @@ std::optional<Chat> CacheManager::get_cached_chat_by_username(const std::string&
         chat.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         chat.last_message_id = sqlite3_column_int64(stmt, 4);
         chat.last_message_timestamp = sqlite3_column_int64(stmt, 5);
+        chat.can_send_messages = sqlite3_column_int(stmt, 6) != 0;
 
         sqlite3_finalize(stmt);
         return chat;
@@ -377,6 +381,7 @@ std::vector<Chat> CacheManager::get_all_cached_chats() {
         chat.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         chat.last_message_id = sqlite3_column_int64(stmt, 4);
         chat.last_message_timestamp = sqlite3_column_int64(stmt, 5);
+        chat.can_send_messages = sqlite3_column_int(stmt, 6) != 0;
 
         chats.push_back(std::move(chat));
     }
@@ -406,6 +411,7 @@ std::vector<Chat> CacheManager::get_cached_chats_by_type(ChatType type) {
         chat.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
         chat.last_message_id = sqlite3_column_int64(stmt, 4);
         chat.last_message_timestamp = sqlite3_column_int64(stmt, 5);
+        chat.can_send_messages = sqlite3_column_int(stmt, 6) != 0;
 
         chats.push_back(std::move(chat));
     }
