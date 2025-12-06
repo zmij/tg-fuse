@@ -18,7 +18,8 @@ public:
     struct Config {
         int32_t api_id;
         std::string api_hash;
-        std::string database_directory;
+        std::string database_directory;  // TDLib database
+        std::string cache_directory;     // SQLite cache for tg-fuse
         std::string files_directory;
         std::string logs_directory;  // If set, TDLib logs go here instead of stderr
         int32_t log_verbosity = 2;   // 0=fatal, 1=error, 2=warning, 3=info, 4+=debug
@@ -52,6 +53,10 @@ public:
     Task<std::vector<Chat>> get_groups();
     Task<std::vector<Chat>> get_channels();
     Task<std::vector<Chat>> get_all_chats();
+
+    /// Preload chats from TDLib (triggers updateNewChat events for all chats)
+    /// Call this early to populate the cache quickly instead of waiting for lazy updates
+    Task<void> preload_chats(int32_t limit = 1000);
 
     // Entity lookup
     Task<std::optional<Chat>> resolve_username(const std::string& username);
@@ -97,10 +102,20 @@ public:
 
     // Event callbacks
     using MessageCallback = std::function<void(const Message&)>;
+    using ChatCallback = std::function<void(const Chat&)>;
+    using UserCallback = std::function<void(const User&)>;
 
     /// Set callback for new messages
     /// The callback is called from the TDLib event loop thread
     void set_message_callback(MessageCallback callback);
+
+    /// Set callback for new/updated chats
+    /// Called when TDLib sends updateNewChat events (e.g., during startup)
+    void set_chat_callback(ChatCallback callback);
+
+    /// Set callback for new/updated users
+    /// Called when TDLib sends updateUser events
+    void set_user_callback(UserCallback callback);
 
 private:
     class Impl;

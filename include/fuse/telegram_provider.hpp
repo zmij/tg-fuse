@@ -349,6 +349,15 @@ private:
 
     /// Set up message callback to update cache on new messages
     void setup_message_callback();
+
+    /// Set up chat callback to invalidate cache on new chats
+    void setup_chat_callback();
+
+    /// Set up user callback to invalidate cache on new users
+    void setup_user_callback();
+
+    /// Preload data at startup (current user and chats)
+    void preload_data();
 };
 
 }  // namespace tgfuse
