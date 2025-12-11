@@ -48,6 +48,7 @@ set(BUILD_TESTING OFF CACHE INTERNAL "Disable testing for dependencies")
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(SPDLOG_BUILD_TESTING OFF CACHE INTERNAL "")
 set(SPDLOG_BUILD_BENCH OFF CACHE INTERNAL "")
+set(SPDLOG_FMT_EXTERNAL ON CACHE INTERNAL "")  # Use external fmt library
 set(CLI11_BUILD_TESTS OFF CACHE INTERNAL "")
 set(CLI11_BUILD_EXAMPLES OFF CACHE INTERNAL "")
 set(BUILD_GMOCK OFF CACHE INTERNAL "")
@@ -94,11 +95,27 @@ FetchContent_Declare(
     GIT_TAG master
 )
 
+# Fetch fmt library
+FetchContent_Declare(
+    fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+    GIT_TAG 10.2.1
+)
+
+# Fetch bustache (mustache templating)
+set(BUSTACHE_ENABLE_TESTING OFF CACHE INTERNAL "")
+set(BUSTACHE_USE_FMT ON CACHE INTERNAL "")
+FetchContent_Declare(
+    bustache
+    GIT_REPOSITORY https://github.com/jamboree/bustache.git
+    GIT_TAG master
+)
+
 # Find SQLite3 (system library)
 find_package(SQLite3 REQUIRED)
 
-# Make dependencies available
-FetchContent_MakeAvailable(nlohmann_json spdlog cli11 googletest tdlib)
+# Make dependencies available (fmt before spdlog since spdlog uses external fmt)
+FetchContent_MakeAvailable(nlohmann_json fmt spdlog cli11 googletest tdlib bustache)
 
 # Enable testing for our project only (after dependencies are loaded)
 enable_testing()

@@ -12,6 +12,16 @@ struct sqlite3;
 
 namespace tg {
 
+/// Statistics for cached messages of a chat (persisted in SQLite)
+struct ChatMessageStats {
+    int64_t chat_id{0};
+    std::size_t message_count{0};    // Number of cached messages
+    std::size_t content_size{0};     // Formatted content size in bytes
+    int64_t last_message_time{0};    // Timestamp of newest message (for mtime)
+    int64_t last_fetch_time{0};      // When we last fetched messages from API
+    int64_t oldest_message_time{0};  // Timestamp of oldest message (for age check)
+};
+
 class CacheManager {
 public:
     explicit CacheManager(const std::string& db_path);
@@ -58,6 +68,17 @@ public:
     // Database maintenance
     void vacuum();
     void cleanup_old_messages(int64_t older_than_timestamp);
+
+    // Chat message statistics
+    void update_chat_message_stats(const ChatMessageStats& stats);
+    std::optional<ChatMessageStats> get_chat_message_stats(int64_t chat_id);
+    std::vector<ChatMessageStats> get_all_chat_message_stats();
+
+    // Get messages within time range for formatting (sorted by timestamp ASC)
+    std::vector<Message> get_messages_for_display(int64_t chat_id, int64_t max_age_seconds);
+
+    // Evict old messages from SQLite for a specific chat
+    void evict_old_messages(int64_t chat_id, int64_t older_than_timestamp);
 
 private:
     void init_database();

@@ -37,6 +37,7 @@ struct DaemonConfig {
     int verbosity{0};
     bool mock_mode{false};
     bool allow_other{false};
+    bool flush_logs{false};  // Flush logs on every message (useful for debugging)
 };
 
 /// API configuration from config file
@@ -170,7 +171,13 @@ bool setup_logging(const DaemonConfig& config) {
 
         auto logger = std::make_shared<spdlog::logger>("tg-fused", sinks.begin(), sinks.end());
         logger->set_level(log_level);
-        logger->flush_on(spdlog::level::warn);
+
+        // Set flush level based on config
+        if (config.flush_logs) {
+            logger->flush_on(spdlog::level::trace);  // Flush every message
+        } else {
+            logger->flush_on(spdlog::level::warn);
+        }
 
         spdlog::set_default_logger(logger);
         spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
@@ -342,6 +349,7 @@ int main(int argc, char* argv[]) {
 
     app.add_flag("-f,--foreground", config.foreground, "Run in foreground (don't daemonise)");
     app.add_flag("-v,--verbose", config.verbosity, "Increase verbosity (-v, -vv, -vvv)");
+    app.add_flag("--flush-logs", config.flush_logs, "Flush logs immediately (useful for debugging)");
     app.add_flag("--mock", config.mock_mode, "Use mock data (no Telegram connection)");
     app.add_flag("--allow-other", config.allow_other, "Allow other users to access the mount");
 
