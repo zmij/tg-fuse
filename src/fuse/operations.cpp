@@ -102,7 +102,15 @@ int DataProviderOperations::readlink(const char* path, char* buf, size_t size) {
 
 int DataProviderOperations::open(const char* path, struct fuse_file_info* fi) {
     auto entry = provider_->get_entry(path);
+
+    // For files that don't exist yet but we're opening for write+create,
+    // let the create() callback handle it
     if (!entry) {
+        int access_mode = fi->flags & O_ACCMODE;
+        if (access_mode != O_RDONLY && (fi->flags & O_CREAT)) {
+            // This will be handled by create() callback
+            return 0;
+        }
         return -ENOENT;
     }
 
@@ -145,10 +153,7 @@ int DataProviderOperations::read(const char* path, char* buf, size_t size, off_t
 }
 
 int DataProviderOperations::release(const char* path, struct fuse_file_info* fi) {
-    (void)path;
-    (void)fi;
-    // Nothing to do for mock filesystem
-    return 0;
+    return provider_->release_file(path, fi->fh);
 }
 
 int DataProviderOperations::write(
@@ -158,8 +163,16 @@ int DataProviderOperations::write(
     off_t offset,
     struct fuse_file_info* fi
 ) {
-    (void)fi;  // Unused
+    // Check if this is a file upload with a valid file handle
+    if (fi && fi->fh != 0) {
+        auto result = provider_->write_file(path, buf, size, offset, fi->fh);
+        if (!result.success) {
+            return -EIO;
+        }
+        return result.bytes_written;
+    }
 
+    // Fallback to old interface (for messages etc.)
     if (!provider_->is_writable(path)) {
         return -EACCES;
     }
@@ -173,5 +186,126 @@ int DataProviderOperations::write(
 }
 
 int DataProviderOperations::truncate(const char* path, off_t size) { return provider_->truncate_file(path, size); }
+
+int DataProviderOperations::create(const char* path, mode_t mode, struct fuse_file_info* fi) {
+    uint64_t fh = 0;
+    int result = provider_->create_file(path, mode, fh);
+    if (result == 0) {
+        fi->fh = fh;
+    }
+    return result;
+}
+
+int DataProviderOperations::chmod(const char* path, mode_t mode) {
+    (void)path;
+    (void)mode;
+    // Virtual filesystem - chmod is a no-op but succeeds
+    return 0;
+}
+
+int DataProviderOperations::chown(const char* path, uid_t uid, gid_t gid) {
+    (void)path;
+    (void)uid;
+    (void)gid;
+    // Virtual filesystem - chown is a no-op but succeeds
+    return 0;
+}
+
+int DataProviderOperations::utimens(const char* path, const struct timespec ts[2]) {
+    (void)path;
+    (void)ts;
+    // Virtual filesystem - utimens is a no-op but succeeds
+    return 0;
+}
+
+#ifdef __APPLE__
+int DataProviderOperations::setxattr(
+    const char* path,
+    const char* name,
+    const char* value,
+    size_t size,
+    int flags,
+    uint32_t position
+) {
+    (void)path;
+    (void)name;
+    (void)value;
+    (void)size;
+    (void)flags;
+    (void)position;
+    // Virtual filesystem silently accepts (but ignores) extended attributes
+    // Returning 0 prevents fcopyfile from failing with "Permission denied"
+    return 0;
+}
+
+int DataProviderOperations::getxattr(const char* path, const char* name, char* value, size_t size, uint32_t position) {
+    (void)path;
+    (void)name;
+    (void)value;
+    (void)size;
+    (void)position;
+    // No extended attributes stored - return "not found"
+    return -ENOATTR;
+}
+
+int DataProviderOperations::listxattr(const char* path, char* list, size_t size) {
+    (void)path;
+    (void)list;
+    (void)size;
+    // Return 0 to indicate empty list of attributes
+    return 0;
+}
+
+int DataProviderOperations::chflags(const char* path, uint32_t flags) {
+    (void)path;
+    (void)flags;
+    // Virtual filesystem silently accepts (but ignores) file flags
+    // This prevents fcopyfile from failing with "Permission denied"
+    return 0;
+}
+
+int DataProviderOperations::setattr_x(const char* path, struct setattr_x* attr) {
+    (void)path;
+    (void)attr;
+    // Virtual filesystem silently accepts (but ignores) extended attribute changes
+    // This is called by macOS for combined attribute operations
+    return 0;
+}
+
+int DataProviderOperations::fsetattr_x(const char* path, struct setattr_x* attr, struct fuse_file_info* fi) {
+    (void)path;
+    (void)attr;
+    (void)fi;
+    // Virtual filesystem silently accepts (but ignores) extended attribute changes
+    return 0;
+}
+#else
+int DataProviderOperations::setxattr(const char* path, const char* name, const char* value, size_t size, int flags) {
+    (void)path;
+    (void)name;
+    (void)value;
+    (void)size;
+    (void)flags;
+    // Virtual filesystem silently accepts (but ignores) extended attributes
+    return 0;
+}
+
+int DataProviderOperations::getxattr(const char* path, const char* name, char* value, size_t size) {
+    (void)path;
+    (void)name;
+    (void)value;
+    (void)size;
+    // No extended attributes stored - return "not found"
+    return -ENODATA;  // Linux uses ENODATA instead of ENOATTR
+}
+
+int DataProviderOperations::listxattr(const char* path, char* list, size_t size) {
+    (void)path;
+    (void)list;
+    (void)size;
+    // Return 0 to indicate empty list of attributes
+    return 0;
+}
+#endif
 
 }  // namespace tgfuse

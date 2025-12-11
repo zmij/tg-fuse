@@ -11,8 +11,10 @@
 #include <bustache/render/string.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 namespace tgfuse {
@@ -461,6 +463,12 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
         return info;
     }
 
+    // Check for /.uploads directory
+    if (components.size() == 1 && components[0] == kUploadsDir) {
+        info.category = PathCategory::UPLOADS_DIR;
+        return info;
+    }
+
     // Check for top-level directories
     if (components[0] == kUsersDir) {
         if (components.size() == 1) {
@@ -478,6 +486,10 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::USER_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::USER_MEDIA_DIR;
+            } else {
+                // Unknown file in user directory - could be an upload
+                info.file_entry_name = components[2];
+                info.category = PathCategory::USER_UPLOAD;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
@@ -511,6 +523,10 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::GROUP_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::GROUP_MEDIA_DIR;
+            } else {
+                // Unknown file in group directory - could be an upload
+                info.file_entry_name = components[2];
+                info.category = PathCategory::GROUP_UPLOAD;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
@@ -537,6 +553,10 @@ TelegramDataProvider::PathInfo TelegramDataProvider::parse_path(std::string_view
                 info.category = PathCategory::CHANNEL_FILES_DIR;
             } else if (components[2] == kMediaDir) {
                 info.category = PathCategory::CHANNEL_MEDIA_DIR;
+            } else {
+                // Unknown file in channel directory - could be an upload
+                info.file_entry_name = components[2];
+                info.category = PathCategory::CHANNEL_UPLOAD;
             }
         } else if (components.size() == 4 && components[2] == kFilesDir) {
             info.entity_name = components[1];
@@ -570,6 +590,7 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
             entries.push_back(Entry::directory(std::string(kContactsDir)));
             entries.push_back(Entry::directory(std::string(kGroupsDir)));
             entries.push_back(Entry::directory(std::string(kChannelsDir)));
+            entries.push_back(Entry::directory(std::string(kUploadsDir)));
             // Self symlink pointing to current user's directory
             if (current_user_) {
                 auto dir_name = get_user_dir_name(*current_user_);
@@ -584,6 +605,19 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                 }
             }
             break;
+
+        case PathCategory::UPLOADS_DIR: {
+            // List pending uploads from temp directory
+            std::lock_guard<std::mutex> upload_lock(uploads_mutex_);
+            for (const auto& [fh, upload] : pending_uploads_) {
+                auto entry = Entry::file(upload.original_filename, upload.bytes_written, 0644);
+                entry.mtime = std::time(nullptr);
+                entry.atime = entry.mtime;
+                entry.ctime = entry.mtime;
+                entries.push_back(std::move(entry));
+            }
+            break;
+        }
 
         case PathCategory::USERS_DIR:
             for (const auto& [name, user] : users_) {
@@ -646,6 +680,9 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                     media_entry.ctime = media_entry.mtime;
                 }
                 entries.push_back(std::move(media_entry));
+
+                // Add pending/completed uploads in this directory
+                add_uploads_to_listing(path, entries);
             }
             break;
         }
@@ -700,6 +737,9 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                     media_entry.ctime = media_entry.mtime;
                 }
                 entries.push_back(std::move(media_entry));
+
+                // Add pending/completed uploads in this directory
+                add_uploads_to_listing(path, entries);
             }
             break;
         }
@@ -754,6 +794,9 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                     media_entry.ctime = media_entry.mtime;
                 }
                 entries.push_back(std::move(media_entry));
+
+                // Add pending/completed uploads in this directory
+                add_uploads_to_listing(path, entries);
             }
             break;
         }
@@ -799,6 +842,9 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                     entry.ctime = entry.mtime;
                     entries.push_back(std::move(entry));
                 }
+
+                // Add pending/completed uploads in this directory
+                add_uploads_to_listing(path, entries);
             }
             break;
         }
@@ -844,6 +890,9 @@ std::vector<Entry> TelegramDataProvider::list_directory(std::string_view path) {
                     entry.ctime = entry.mtime;
                     entries.push_back(std::move(entry));
                 }
+
+                // Add pending/completed uploads in this directory
+                add_uploads_to_listing(path, entries);
             }
             break;
         }
@@ -879,6 +928,9 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
 
         case PathCategory::CHANNELS_DIR:
             return Entry::directory(std::string(kChannelsDir));
+
+        case PathCategory::UPLOADS_DIR:
+            return Entry::directory(std::string(kUploadsDir));
 
         case PathCategory::USER_DIR: {
             auto* user = find_user_by_dir_name(info.entity_name);
@@ -1165,6 +1217,28 @@ std::optional<Entry> TelegramDataProvider::get_entry(std::string_view path) {
 
         default:
             break;
+    }
+
+    // Check if this is a pending upload (file being created)
+    // We need to release the main lock before checking uploads_mutex_ to avoid deadlock
+    lock.unlock();
+    if (auto* upload = find_pending_upload_by_path(path)) {
+        // Return a synthetic entry for the file being uploaded
+        auto filename = std::filesystem::path(upload->virtual_path).filename().string();
+        auto entry = Entry::file(filename, upload->bytes_written, 0644);
+        entry.mtime = std::time(nullptr);
+        entry.atime = entry.mtime;
+        entry.ctime = entry.mtime;
+        return entry;
+    }
+
+    // Check if this is a recently completed upload (for post-release operations like setxattr)
+    if (auto* completed = find_completed_upload_by_path(path)) {
+        auto entry = Entry::file(completed->filename, completed->size, 0644);
+        entry.mtime = std::time(nullptr);
+        entry.atime = entry.mtime;
+        entry.ctime = entry.mtime;
+        return entry;
     }
 
     return std::nullopt;
@@ -1768,7 +1842,13 @@ std::string TelegramDataProvider::format_and_cache_messages(int64_t chat_id, con
 
 bool TelegramDataProvider::is_writable(std::string_view path) const {
     auto info = parse_path(path);
-    return is_messages_path(info.category);
+    return is_messages_path(info.category) || is_upload_path(info.category);
+}
+
+bool TelegramDataProvider::is_upload_path(PathCategory category) const {
+    return is_files_dir_path(category) || is_file_path(category) || is_media_dir_path(category) ||
+           is_media_path(category) || category == PathCategory::USER_UPLOAD || category == PathCategory::GROUP_UPLOAD ||
+           category == PathCategory::CHANNEL_UPLOAD;
 }
 
 bool TelegramDataProvider::is_append_only(std::string_view path) const {
@@ -1876,6 +1956,461 @@ WriteResult TelegramDataProvider::send_message(int64_t chat_id, const char* data
     } catch (const std::exception& e) {
         spdlog::error("Failed to send message to chat {}: {}", chat_id, e.what());
         return WriteResult{false, 0, e.what()};
+    }
+}
+
+int64_t TelegramDataProvider::get_chat_id_for_upload(const PathInfo& info) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    switch (info.category) {
+        case PathCategory::USER_UPLOAD:
+        case PathCategory::USER_FILES_DIR:
+        case PathCategory::USER_FILE:
+        case PathCategory::USER_MEDIA_DIR:
+        case PathCategory::USER_MEDIA: {
+            auto* user = find_user_by_dir_name(info.entity_name);
+            return user ? user->id : 0;
+        }
+        case PathCategory::GROUP_UPLOAD:
+        case PathCategory::GROUP_FILES_DIR:
+        case PathCategory::GROUP_FILE:
+        case PathCategory::GROUP_MEDIA_DIR:
+        case PathCategory::GROUP_MEDIA: {
+            auto* group = find_group_by_dir_name(info.entity_name);
+            return group ? group->id : 0;
+        }
+        case PathCategory::CHANNEL_UPLOAD:
+        case PathCategory::CHANNEL_FILES_DIR:
+        case PathCategory::CHANNEL_FILE:
+        case PathCategory::CHANNEL_MEDIA_DIR:
+        case PathCategory::CHANNEL_MEDIA: {
+            auto* channel = find_channel_by_dir_name(info.entity_name);
+            return channel ? channel->id : 0;
+        }
+        default:
+            return 0;
+    }
+}
+
+bool TelegramDataProvider::is_valid_media_extension(const std::string& filename) const {
+    namespace fs = std::filesystem;
+    auto ext = fs::path(filename).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    static const std::set<std::string> media_extensions = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".tiff",
+        ".mp4",
+        ".mov",
+        ".avi",
+        ".mkv",
+        ".webm",
+        ".m4v",
+        ".3gp"
+    };
+    return media_extensions.count(ext) > 0;
+}
+
+std::string TelegramDataProvider::extract_original_filename(const std::string& entry_name) const {
+    // Strip YYYYMMDD-HHMM- prefix if present
+    if (entry_name.size() > 14 && entry_name[8] == '-' && entry_name[13] == '-') {
+        return entry_name.substr(14);
+    }
+    return entry_name;
+}
+
+std::filesystem::path TelegramDataProvider::get_upload_temp_dir() const {
+    return std::filesystem::temp_directory_path() / "tg-fuse" / "uploads";
+}
+
+TelegramDataProvider::UploadAction
+TelegramDataProvider::detect_upload_action(const std::string& path, const std::string& filename) const {
+    namespace fs = std::filesystem;
+    auto ext = fs::path(filename).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    // Only .txt and .md are sent as text messages
+    static const std::set<std::string> text_extensions = {".txt", ".md"};
+    static const std::set<std::string> media_extensions = {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp"
+    };
+
+    if (media_extensions.count(ext)) {
+        return UploadAction::SEND_AS_MEDIA;
+    }
+
+    if (text_extensions.count(ext)) {
+        // Verify it's actually valid UTF-8 text
+        if (is_valid_text_file(path)) {
+            return UploadAction::SEND_AS_TEXT;
+        }
+    }
+
+    return UploadAction::SEND_AS_DOCUMENT;
+}
+
+bool TelegramDataProvider::is_valid_text_file(const std::string& path) const {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs) {
+        return false;
+    }
+
+    // Read file content
+    std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
+    // Use existing text validation
+    return MessageFormatter::is_valid_text(content.data(), content.size());
+}
+
+int TelegramDataProvider::send_file_as_text(int64_t chat_id, const std::string& path) {
+    std::ifstream ifs(path);
+    if (!ifs) {
+        spdlog::error("Failed to open file for text send: {}", path);
+        return -EIO;
+    }
+
+    std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
+    auto result = send_message(chat_id, content.data(), content.size());
+
+    // Clean up temp file
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    return result.success ? 0 : -EIO;
+}
+
+std::string TelegramDataProvider::compute_file_hash(const std::string& path) const {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs) {
+        return "";
+    }
+
+    // Simple hash using std::hash on file content
+    // For production, consider using OpenSSL SHA256
+    std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
+    std::size_t hash = std::hash<std::string>{}(content);
+    return fmt::format("{:016x}", hash);
+}
+
+bool TelegramDataProvider::send_file_by_remote_id(
+    int64_t chat_id,
+    const std::string& remote_file_id,
+    const std::string& filename,
+    tg::SendMode mode
+) {
+    try {
+        auto task = client_.send_file_by_id(chat_id, remote_file_id, filename, mode);
+        task.get_result();
+        spdlog::info("Sent cached file {} to chat {}", filename, chat_id);
+        return true;
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to send cached file, will re-upload: {}", e.what());
+        return false;
+    }
+}
+
+int TelegramDataProvider::create_file(std::string_view path, mode_t mode, uint64_t& fh) {
+    (void)mode;
+    auto info = parse_path(path);
+
+    if (!is_upload_path(info.category)) {
+        return -EACCES;
+    }
+
+    int64_t chat_id = get_chat_id_for_upload(info);
+    if (chat_id == 0) {
+        return -ENOENT;
+    }
+
+    // Determine upload mode based on target path
+    tg::SendMode upload_mode = tg::SendMode::AUTO;
+    if (is_files_dir_path(info.category) || is_file_path(info.category)) {
+        upload_mode = tg::SendMode::DOCUMENT;
+    } else if (is_media_dir_path(info.category) || is_media_path(info.category)) {
+        upload_mode = tg::SendMode::MEDIA;
+        // Validate media type - reject non-media files in media/ directory
+        if (!is_valid_media_extension(info.file_entry_name)) {
+            spdlog::warn("Rejected non-media file in media/: {}", info.file_entry_name);
+            return -EINVAL;
+        }
+    }
+    // USER_UPLOAD, GROUP_UPLOAD, CHANNEL_UPLOAD remain AUTO
+
+    // Extract filename (strip timestamp prefix if present)
+    std::string filename = extract_original_filename(info.file_entry_name);
+
+    // Create temp directory and file
+    auto temp_dir = get_upload_temp_dir();
+    std::error_code ec;
+    std::filesystem::create_directories(temp_dir, ec);
+    if (ec) {
+        spdlog::error("Failed to create temp directory: {}", ec.message());
+        return -EIO;
+    }
+
+    auto temp_path = temp_dir / fmt::format("{}_{}", next_upload_handle_.load(), filename);
+
+    // Track pending upload
+    fh = next_upload_handle_++;
+    {
+        std::lock_guard<std::mutex> lock(uploads_mutex_);
+        pending_uploads_[fh] = PendingUpload{
+            .temp_path = temp_path.string(),
+            .original_filename = filename,
+            .virtual_path = std::string(path),
+            .chat_id = chat_id,
+            .mode = upload_mode,
+            .bytes_written = 0
+        };
+    }
+
+    spdlog::debug("create_file: path={}, fh={}, temp={}", path, fh, temp_path.string());
+    return 0;
+}
+
+WriteResult
+TelegramDataProvider::write_file(std::string_view path, const char* data, std::size_t size, off_t offset, uint64_t fh) {
+    // Check if this is a pending upload
+    {
+        std::lock_guard<std::mutex> lock(uploads_mutex_);
+        auto it = pending_uploads_.find(fh);
+        if (it != pending_uploads_.end()) {
+            auto& upload = it->second;
+
+            // Write to temp file
+            std::ofstream ofs(upload.temp_path, std::ios::binary | (offset == 0 ? std::ios::trunc : std::ios::app));
+            if (!ofs) {
+                spdlog::error("Failed to open temp file: {}", upload.temp_path);
+                return WriteResult{false, 0, "Failed to open temp file"};
+            }
+            ofs.seekp(offset);
+            ofs.write(data, static_cast<std::streamsize>(size));
+            upload.bytes_written += size;
+
+            spdlog::debug("write_file: fh={}, offset={}, size={}, total={}", fh, offset, size, upload.bytes_written);
+            return WriteResult{true, static_cast<int>(size), ""};
+        }
+    }
+
+    // Fall through to existing message handling
+    return write_file(path, data, size, offset);
+}
+
+int TelegramDataProvider::release_file(std::string_view path, uint64_t fh) {
+    (void)path;
+
+    // Clean up old completed uploads periodically
+    cleanup_completed_uploads();
+
+    PendingUpload upload;
+    std::string virtual_path;
+    {
+        std::lock_guard<std::mutex> lock(uploads_mutex_);
+        auto it = pending_uploads_.find(fh);
+        if (it == pending_uploads_.end()) {
+            return 0;  // Not an upload
+        }
+        virtual_path = it->second.virtual_path;  // Save before move
+        upload = std::move(it->second);
+        pending_uploads_.erase(it);
+    }
+
+    spdlog::debug("release_file: fh={}, file={}, bytes_written={}", fh, upload.original_filename, upload.bytes_written);
+
+    // Check file exists and get size
+    std::error_code ec;
+    auto file_size = std::filesystem::file_size(upload.temp_path, ec);
+    if (ec) {
+        spdlog::error("Failed to get file size: {}", ec.message());
+        std::filesystem::remove(upload.temp_path, ec);
+        return -EIO;
+    }
+
+    // Check file size limit
+    if (static_cast<int64_t>(file_size) > tg::kMaxFileSizeRegular) {
+        std::filesystem::remove(upload.temp_path, ec);
+        spdlog::error("File too large: {} bytes (limit: {} bytes)", file_size, tg::kMaxFileSizeRegular);
+        return -EFBIG;
+    }
+
+    // Handle AUTO mode - detect content type
+    if (upload.mode == tg::SendMode::AUTO) {
+        auto detected = detect_upload_action(upload.temp_path, upload.original_filename);
+        if (detected == UploadAction::SEND_AS_TEXT) {
+            // Read file and send as text message(s)
+            int result = send_file_as_text(upload.chat_id, upload.temp_path);
+            if (result == 0) {
+                mark_upload_completed(virtual_path, upload.original_filename, file_size);
+            }
+            return result;
+        }
+        // Convert UploadAction to SendMode for file uploads
+        upload.mode = (detected == UploadAction::SEND_AS_MEDIA) ? tg::SendMode::MEDIA : tg::SendMode::DOCUMENT;
+    }
+
+    // Compute file hash for deduplication cache
+    std::string file_hash = compute_file_hash(upload.temp_path);
+
+    // Check upload cache for existing remote file ID
+    auto cached_remote_id = client_.cache().get_cached_upload(file_hash);
+    if (cached_remote_id) {
+        spdlog::info(
+            "Cache hit for {} (hash={}), reusing remote file", upload.original_filename, file_hash.substr(0, 16) + "..."
+        );
+
+        // Send using cached remote file ID
+        if (send_file_by_remote_id(upload.chat_id, *cached_remote_id, upload.original_filename, upload.mode)) {
+            // Success - clean up temp file immediately since no upload needed
+            std::filesystem::remove(upload.temp_path, ec);
+            mark_upload_completed(virtual_path, upload.original_filename, file_size);
+            return 0;
+        }
+
+        // Cache hit but send failed - invalidate cache and fall through to fresh upload
+        spdlog::warn("Cached remote file ID invalid, invalidating cache and re-uploading");
+        client_.cache().invalidate_upload(file_hash);
+    }
+
+    // Upload new file - rename to original filename so TDLib uses correct name
+    auto upload_path = std::filesystem::path(upload.temp_path).parent_path() / upload.original_filename;
+    spdlog::debug("Renaming {} -> {}", upload.temp_path, upload_path.string());
+    std::filesystem::rename(upload.temp_path, upload_path, ec);
+    if (ec) {
+        spdlog::error("Failed to rename temp file: {}", ec.message());
+        std::filesystem::remove(upload.temp_path, ec);
+        return -EIO;
+    }
+
+    // Verify file exists after rename
+    if (!std::filesystem::exists(upload_path)) {
+        spdlog::error("File does not exist after rename: {}", upload_path.string());
+        return -EIO;
+    }
+
+    try {
+        std::string path_str = upload_path.string();
+        spdlog::info(
+            "Uploading {} to chat {} as {} (path={})",
+            upload.original_filename,
+            upload.chat_id,
+            upload.mode == tg::SendMode::MEDIA ? "media" : "document",
+            path_str
+        );
+        // Pass file hash and size for caching in updateMessageSendSucceeded
+        auto task = client_.send_file(upload.chat_id, path_str, upload.mode, file_hash, file_size);
+        auto msg = task.get_result();
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to send file: {}", e.what());
+        std::filesystem::remove(upload_path, ec);
+        return -EIO;
+    }
+
+    // Note: Do NOT delete the file here. TDLib uploads asynchronously and still
+    // needs access to the file. The TelegramClient will delete it when
+    // updateMessageSendSucceeded is received.
+    mark_upload_completed(virtual_path, upload.original_filename, file_size);
+    return 0;
+}
+
+const TelegramDataProvider::PendingUpload* TelegramDataProvider::find_pending_upload_by_path(
+    std::string_view path
+) const {
+    std::lock_guard<std::mutex> lock(uploads_mutex_);
+    for (const auto& [fh, upload] : pending_uploads_) {
+        if (upload.virtual_path == path) {
+            return &upload;
+        }
+    }
+    return nullptr;
+}
+
+const TelegramDataProvider::CompletedUpload* TelegramDataProvider::find_completed_upload_by_path(
+    std::string_view path
+) const {
+    std::lock_guard<std::mutex> lock(uploads_mutex_);
+    auto it = completed_uploads_.find(std::string(path));
+    if (it != completed_uploads_.end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
+void TelegramDataProvider::mark_upload_completed(
+    const std::string& virtual_path,
+    const std::string& filename,
+    std::size_t size
+) {
+    std::lock_guard<std::mutex> lock(uploads_mutex_);
+    completed_uploads_[virtual_path] = CompletedUpload{
+        .filename = filename,
+        .size = size,
+        .completed_at = std::chrono::steady_clock::now(),
+    };
+    spdlog::debug("Marked upload completed: {} ({} bytes)", virtual_path, size);
+}
+
+void TelegramDataProvider::cleanup_completed_uploads() {
+    std::lock_guard<std::mutex> lock(uploads_mutex_);
+    auto now = std::chrono::steady_clock::now();
+    constexpr auto kMaxAge = std::chrono::seconds(30);  // Keep for 30s for slow post-release ops
+
+    for (auto it = completed_uploads_.begin(); it != completed_uploads_.end();) {
+        if (now - it->second.completed_at > kMaxAge) {
+            spdlog::debug("Cleaning up completed upload: {}", it->first);
+            it = completed_uploads_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void TelegramDataProvider::add_uploads_to_listing(std::string_view dir_path, std::vector<Entry>& entries) const {
+    std::lock_guard<std::mutex> lock(uploads_mutex_);
+
+    // Ensure dir_path ends with / for proper prefix matching
+    std::string dir_prefix(dir_path);
+    if (!dir_prefix.empty() && dir_prefix.back() != '/') {
+        dir_prefix += '/';
+    }
+
+    // Add pending uploads in this directory
+    for (const auto& [fh, upload] : pending_uploads_) {
+        // Check if this upload's virtual_path starts with dir_prefix
+        if (upload.virtual_path.size() > dir_prefix.size() &&
+            upload.virtual_path.compare(0, dir_prefix.size(), dir_prefix) == 0) {
+            // Extract filename (part after dir_prefix, should not contain /)
+            auto remaining = upload.virtual_path.substr(dir_prefix.size());
+            if (remaining.find('/') == std::string::npos) {
+                auto entry = Entry::file(upload.original_filename, upload.bytes_written, 0644);
+                entry.mtime = std::time(nullptr);
+                entry.atime = entry.mtime;
+                entry.ctime = entry.mtime;
+                entries.push_back(std::move(entry));
+            }
+        }
+    }
+
+    // Add completed uploads in this directory
+    for (const auto& [vpath, completed] : completed_uploads_) {
+        // Check if this upload's virtual_path starts with dir_prefix
+        if (vpath.size() > dir_prefix.size() && vpath.compare(0, dir_prefix.size(), dir_prefix) == 0) {
+            // Extract filename (part after dir_prefix, should not contain /)
+            auto remaining = vpath.substr(dir_prefix.size());
+            if (remaining.find('/') == std::string::npos) {
+                auto entry = Entry::file(completed.filename, completed.size, 0644);
+                entry.mtime = std::time(nullptr);
+                entry.atime = entry.mtime;
+                entry.ctime = entry.mtime;
+                entries.push_back(std::move(entry));
+            }
+        }
     }
 }
 

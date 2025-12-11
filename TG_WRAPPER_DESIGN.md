@@ -8,6 +8,7 @@ A modern C++20 wrapper around TDLib (Telegram Database Library) providing:
 - Type-safe data structures
 - Exception-based error handling
 - Per-directory file type behaviour for VFS integration
+- Upload deduplication via file hash caching
 
 ## Architecture
 
@@ -24,7 +25,7 @@ A modern C++20 wrapper around TDLib (Telegram Database Library) providing:
 │   │  Public Coroutine-based API     │   │
 │   │  - get_all_chats()              │   │
 │   │  - send_text()                  │   │
-│   │  - send_file()                  │   │
+│   │  - send_file() / send_file_by_id│   │
 │   │  - list_media() / list_files()  │   │
 │   └─────────────────────────────────┘   │
 └──────┬────────────────────────┬─────────┘
@@ -39,6 +40,7 @@ A modern C++20 wrapper around TDLib (Telegram Database Library) providing:
 │  - chats        │    │  - Callbacks    │
 │  - messages     │    │  - Queries      │
 │  - files        │    │                 │
+│  - upload_cache │    │                 │
 └─────────────────┘    └─────────────────┘
        │                        │
        ▼                        ▼
@@ -60,12 +62,14 @@ A modern C++20 wrapper around TDLib (Telegram Database Library) providing:
 - `MediaInfo` - File metadata (type, size, dimensions, etc.)
 - `FileListItem` - Simplified file listing for VFS
 - `ChatStatus` - Last message ID and timestamp
+- `ChatMessageStats` - Message statistics per chat
 
 **Enumerations:**
 - `ChatType` - PRIVATE, GROUP, SUPERGROUP, CHANNEL
 - `MediaType` - PHOTO, VIDEO, DOCUMENT, AUDIO, VOICE, ANIMATION, STICKER, VIDEO_NOTE
 - `SendMode` - AUTO, MEDIA, DOCUMENT
 - `AuthState` - WAIT_PHONE, WAIT_CODE, WAIT_PASSWORD, READY
+- `UserStatus` - ONLINE, OFFLINE, RECENTLY, LAST_WEEK, LAST_MONTH, LONG_AGO
 
 **Helper Functions:**
 - `chat_type_to_string()` - Convert enum to readable string
@@ -116,11 +120,10 @@ A modern C++20 wrapper around TDLib (Telegram Database Library) providing:
 ```sql
 -- Users table
 users (id, username, first_name, last_name, phone_number,
-       is_contact, last_message_id, last_message_timestamp, updated_at)
+       is_contact, status, last_seen, updated_at)
 
 -- Chats table
-chats (id, type, title, username, last_message_id,
-       last_message_timestamp, updated_at)
+chats (id, type, title, username, updated_at)
 
 -- Messages table
 messages (id, chat_id, sender_id, timestamp, text, is_outgoing,
@@ -131,6 +134,13 @@ messages (id, chat_id, sender_id, timestamp, text, is_outgoing,
 -- Files table
 files (message_id, chat_id, filename, file_size, timestamp,
        type, file_id)
+
+-- Chat message statistics
+chat_message_stats (chat_id, message_count, content_size,
+                    last_message_time, last_fetch_time, oldest_message_time)
+
+-- Upload deduplication cache
+upload_cache (file_hash, file_size, remote_file_id, created_at)
 ```
 
 **Indices:**
@@ -141,6 +151,7 @@ files (message_id, chat_id, filename, file_size, timestamp,
 - `idx_messages_media` - Media-only message filtering
 - `idx_files_chat_type` - File type filtering
 - `idx_files_timestamp` - Chronological file listing
+- `idx_upload_cache_size` - File size lookup
 
 **Features:**
 - WAL mode for better concurrency
@@ -149,6 +160,7 @@ files (message_id, chat_id, filename, file_size, timestamp,
 - Automatic timestamp tracking
 - Cache invalidation per chat
 - Vacuum and cleanup utilities
+- Upload deduplication cache
 
 **API:**
 - User/Chat caching and retrieval
@@ -157,6 +169,7 @@ files (message_id, chat_id, filename, file_size, timestamp,
 - Username-based lookups
 - Type-filtered queries
 - Selective invalidation
+- Upload cache for file deduplication
 
 ### 5. Telegram Client (`include/tg/client.hpp`, `src/tg/client.cpp`)
 
@@ -167,6 +180,8 @@ struct Config {
     std::string api_hash;
     std::string database_directory;
     std::string files_directory;
+    std::string logs_directory;       // Optional TDLib log directory
+    int32_t log_verbosity = 2;
     bool use_test_dc;
     bool use_file_database;
     bool use_chat_info_database;
@@ -184,6 +199,7 @@ struct Config {
 - Authorization state machine
 - Query ID management
 - Thread-safe callback map
+- Pending upload tracking for deduplication
 
 **Public API (Coroutine-based):**
 
@@ -199,32 +215,40 @@ struct Config {
 - `logout()` - End session
 
 *Entity Listing:*
-- `get_users()` - All user contacts
+- `get_users()` - Users from private chats
 - `get_groups()` - All groups/supergroups
 - `get_channels()` - All channels
 - `get_all_chats()` - All chats combined
 
 *Entity Lookup:*
-- `resolve_username(username)` - Find by @username or #groupname
+- `resolve_username(username)` - Find by @username
 - `get_chat(chat_id)` - Get chat by ID
 - `get_user(user_id)` - Get user by ID
+- `get_me()` - Get current logged-in user
 
 *Messaging:*
 - `send_text(chat_id, text)` - Send text message
 - `get_messages(chat_id, limit)` - Get recent messages
 - `get_last_n_messages(chat_id, n)` - Get last N messages
+- `get_messages_until(chat_id, min, max_age)` - Fetch until age threshold
 
 *File Operations:*
 - `send_file(chat_id, path, mode)` - Upload and send file
+- `send_file(chat_id, path, mode, hash, size)` - Upload with caching
+- `send_file_by_id(chat_id, remote_id, filename, mode)` - Send cached file
 - `list_media(chat_id)` - List photos/videos/animations
 - `list_files(chat_id)` - List documents/audio
 - `download_file(file_id, dest)` - Download file
 
 *Status:*
 - `get_chat_status(chat_id)` - Get last message info
+- `get_user_bio(user_id)` - Get user bio (lazy loaded)
 
 *Cache Access:*
 - `cache()` - Direct access to CacheManager
+
+*Callbacks:*
+- `set_message_callback(callback)` - Register for new messages
 
 **Update Processing:**
 - Background thread continuously polls TDLib
@@ -232,13 +256,8 @@ struct Config {
 - Authorization state updates tracked
 - New chat/message updates logged
 - Callback-based query responses
-
-**Current Status:**
-- ✅ Infrastructure complete
-- ✅ Authentication flow implemented
-- ⏳ Entity operations are stubs (need TDLib integration)
-- ⏳ Messaging operations are stubs
-- ⏳ File operations are stubs
+- `updateMessageSendSucceeded` - Caches remote file ID for deduplication
+- `updateMessageSendFailed` - Logs upload failures
 
 ### 6. Build System
 
@@ -275,71 +294,84 @@ struct Config {
 ### Directory Structure
 
 ```
-/dev/tg/
-├── @alice/              # Private chat with user "alice"
-│   ├── messages         # Read/write text messages
-│   ├── media/           # Photos, videos, animations
-│   └── files/           # Documents, audio files
-├── #mygroup/            # Group chat
-│   ├── messages
-│   ├── media/
-│   └── files/
-├── -1001234567890/      # Private channel/group (by ID)
-│   ├── messages
-│   ├── media/
-│   └── files/
-└── .meta/               # Control interface (future)
+/mnt/tg/  (or /Volumes/tg on macOS)
+├── users/
+│   └── alice/              # Private chat with user "alice"
+│       ├── .info           # User information (read-only)
+│       ├── messages        # Read/write text messages
+│       ├── media/          # Photos, videos, animations
+│       │   └── 20241205-1430-photo.jpg
+│       └── files/          # Documents, audio files
+│           └── 20241205-1445-document.pdf
+├── contacts/
+│   └── alice -> ../users/alice   # Symlinks to contact users
+├── groups/
+│   └── mygroup/            # Group chat
+│       ├── .info
+│       ├── messages
+│       ├── media/
+│       └── files/
+├── channels/
+│   └── news/               # Channel
+│       ├── .info
+│       ├── messages
+│       ├── media/
+│       └── files/
+├── @alice -> users/alice   # Symlink for quick access (contacts only)
+└── self -> users/me        # Current user
 ```
 
 ### FUSE Operation Mapping
 
-**readdir("/"):**
+**readdir("/users/"):**
 ```cpp
-chats = co_await client.get_all_chats()
-for chat in chats:
-    add_entry(chat.get_directory_name())
+users = co_await client.get_users()
+for user in users:
+    add_entry(user.get_identifier())
 ```
 
-**readdir("/@alice/"):**
+**readdir("/users/alice/"):**
 ```cpp
+add_entry(".info")
 add_entry("messages")
 add_entry("media")
 add_entry("files")
 ```
 
-**read("/@alice/messages"):**
+**read("/users/alice/messages"):**
 ```cpp
 messages = co_await client.get_last_n_messages(chat_id, N)
 return format_as_text(messages)  // Compatible with tail -n
 ```
 
-**write("/@alice/messages"):**
+**write("/users/alice/messages"):**
 ```cpp
 co_await client.send_text(chat_id, content)
 ```
 
-**readdir("/@alice/media/"):**
+**readdir("/users/alice/media/"):**
 ```cpp
 items = co_await client.list_media(chat_id)
 for item in items:
-    add_entry(generate_filename(item))
+    add_entry(item.filename)  // YYYYMMDD-HHMM-original.ext
 ```
 
-**write("/@alice/media/photo.jpg"):**
+**write("/users/alice/media/photo.jpg"):**
 ```cpp
 co_await client.send_file(chat_id, source_path, SendMode::MEDIA)
 ```
 
-**write("/@alice/files/document.pdf"):**
+**write("/users/alice/files/document.pdf"):**
 ```cpp
 co_await client.send_file(chat_id, source_path, SendMode::DOCUMENT)
 ```
 
 ### Per-Directory Behaviour
 
-- **AUTO mode**: Detects file type by MIME and extension
-  - Images (.jpg, .png, .gif) → MEDIA (compressed)
-  - Videos (.mp4, .mov) → MEDIA (compressed)
+- **AUTO mode** (copying to chat directory): Detects file type by MIME and extension
+  - Images (.jpg, .png, .gif, .webp) → MEDIA (compressed)
+  - Videos (.mp4, .mov, .mkv) → MEDIA (compressed)
+  - Text files (.txt, .md) → Sent as text message
   - Other → DOCUMENT (original)
 
 - **/media directory**: Forces `SendMode::MEDIA`
@@ -349,6 +381,14 @@ co_await client.send_file(chat_id, source_path, SendMode::DOCUMENT)
 - **/files directory**: Forces `SendMode::DOCUMENT`
   - All files sent as documents
   - Original quality preserved
+
+### Upload Deduplication
+
+When sending a file:
+1. Compute SHA256 hash of file content
+2. Check `upload_cache` for existing remote file ID
+3. If found: use `send_file_by_id()` with cached ID (avoids re-uploading)
+4. If not found: upload via `send_file()`, cache result on success
 
 ## Usage Examples
 
@@ -368,6 +408,9 @@ co_await client.start();
 co_await client.login("+1234567890");
 co_await client.submit_code("12345");
 
+// Get current user
+auto me = co_await client.get_me();
+
 // List chats
 auto chats = co_await client.get_all_chats();
 
@@ -380,6 +423,10 @@ auto msgs = co_await client.get_last_n_messages(chat->id, 10);
 
 // Send file
 co_await client.send_file(chat->id, "/tmp/photo.jpg", tg::SendMode::AUTO);
+
+// Send file with deduplication
+auto msg = co_await client.send_file(chat->id, "/tmp/doc.pdf",
+                                      tg::SendMode::DOCUMENT, file_hash, file_size);
 ```
 
 ### Error Handling
@@ -404,6 +451,10 @@ auto user = cache.get_cached_user_by_username("alice");
 auto chats = cache.get_all_cached_chats();
 auto messages = cache.get_last_n_messages(chat_id, 50);
 
+// Upload deduplication
+auto remote_id = cache.get_cached_upload(file_hash);
+cache.cache_upload(file_hash, file_size, remote_file_id);
+
 // Invalidate
 cache.invalidate_chat(chat_id);
 cache.clear_all();
@@ -420,7 +471,7 @@ cache.clear_all();
    - SQLite cache with full schema
    - Build system integration
 
-2. **TelegramClient Foundation**
+2. **TelegramClient**
    - Configuration and initialisation
    - TDLib client lifecycle management
    - Update processing thread
@@ -433,59 +484,42 @@ cache.clear_all();
    - 2FA password
    - State tracking and synchronisation
 
-4. **Documentation**
+4. **Entity Operations**
+   - `get_users()` - Users from private chats
+   - `get_groups()` - Groups and supergroups
+   - `get_channels()` - Channels
+   - `get_all_chats()` - All chats
+   - `resolve_username()` - Username lookup
+   - `get_chat()` / `get_user()` - ID lookup
+   - `get_me()` - Current user
+
+5. **Messaging**
+   - `send_text()` - Send text messages
+   - `get_messages()` - Fetch message history
+   - `get_last_n_messages()` - Last N messages
+   - `get_messages_until()` - Fetch until age threshold
+   - Message formatting for display
+
+6. **File Operations**
+   - `send_file()` - Upload and send files
+   - `send_file_by_id()` - Send cached files
+   - `list_media()` - List photos/videos
+   - `list_files()` - List documents
+   - `download_file()` - Download files
+   - Upload deduplication via hash caching
+
+7. **FUSE Integration**
+   - Directory structure (/users/, /groups/, /channels/, /contacts/)
+   - Read/write messages
+   - File uploads via copy
+   - Symlinks for quick access
+   - Per-directory send modes
+
+8. **Documentation**
    - Comprehensive usage guide
    - Design documentation
    - Code examples for all features
    - VFS integration patterns
-
-### ⏳ Pending (Stubs in Place)
-
-The following methods have signatures and stub implementations but need full TDLib integration:
-
-1. **Entity Operations**
-   - `get_users()` - Needs `td_api::getContacts`
-   - `get_groups()` - Needs `td_api::getChats` with filtering
-   - `get_channels()` - Needs `td_api::getChats` with filtering
-   - `get_all_chats()` - Needs `td_api::getChats`
-   - `resolve_username()` - Needs `td_api::searchPublicChat`
-   - `get_chat()` - Needs `td_api::getChat`
-   - `get_user()` - Needs `td_api::getUser`
-
-2. **Messaging**
-   - `send_text()` - Needs `td_api::sendMessage` with `inputMessageText`
-   - `get_messages()` - Needs `td_api::getChatHistory`
-
-3. **File Operations**
-   - `send_file()` - Needs `td_api::sendMessage` with `inputMessageDocument`/`inputMessagePhoto`
-   - `list_media()` - Needs `td_api::searchChatMessages` with media filter
-   - `list_files()` - Needs `td_api::searchChatMessages` with document filter
-   - `download_file()` - Needs `td_api::downloadFile`
-
-4. **Status**
-   - `get_chat_status()` - Needs `td_api::getChat` and extract last message info
-
-### 🔜 Future Enhancements
-
-1. **Testing**
-   - Unit tests for data structures
-   - Cache manager tests
-   - TDLib mock for client testing
-   - Integration tests
-
-2. **Optimisations**
-   - Batch message caching
-   - Incremental updates
-   - Lazy file list loading
-   - Cache TTL and expiry policies
-
-3. **Features**
-   - Message editing/deletion
-   - Reactions and stickers
-   - Voice/video messages
-   - Chat folders
-   - User presence
-   - Typing indicators
 
 ## Files Structure
 
@@ -497,59 +531,26 @@ tg-interface/
 │   ├── async.hpp          # Coroutine infrastructure
 │   ├── cache.hpp          # SQLite cache manager
 │   └── client.hpp         # Main TelegramClient API
+├── include/fuse/
+│   ├── data_provider.hpp  # Abstract VFS provider interface
+│   ├── telegram_provider.hpp  # Telegram VFS implementation
+│   ├── operations.hpp     # FUSE operations wrapper
+│   └── platform.hpp       # Platform abstraction
 ├── src/tg/
 │   ├── types.cpp          # Data structure implementations
 │   ├── cache.cpp          # Cache manager implementation
 │   └── client.cpp         # TelegramClient implementation
-├── tests/tg/
-│   └── (future test files)
-├── CMakeLists.txt         # Root build configuration
-├── src/CMakeLists.txt     # tglib + tg-fuse targets
-├── TG_WRAPPER_USAGE.md    # Usage guide and examples
-└── TG_WRAPPER_DESIGN.md   # This file
+├── src/fuse/
+│   ├── telegram_provider.cpp  # VFS implementation
+│   └── operations.cpp     # FUSE callbacks
+├── src/ctl/              # CLI companion app
+├── src/fused/            # FUSE daemon
+├── CMakeLists.txt        # Root build configuration
+├── src/CMakeLists.txt    # Library targets
+├── TG_WRAPPER_README.md  # Quick reference
+├── TG_WRAPPER_USAGE.md   # Usage guide and examples
+└── TG_WRAPPER_DESIGN.md  # This file
 ```
-
-## Next Steps
-
-### Phase 1: Complete Core Operations (Entity Listing)
-
-Implement TDLib integration for:
-1. `getContacts` → `get_users()`
-2. `getChats` → `get_all_chats()` with filtering
-3. `searchPublicChat` → `resolve_username()`
-4. `getChat` / `getUser` → lookup methods
-5. Cache population and synchronisation
-
-### Phase 2: Messaging
-
-1. `sendMessage` with `inputMessageText` → `send_text()`
-2. `getChatHistory` → `get_messages()`
-3. Message parsing and caching
-4. Format for VFS display
-
-### Phase 3: File Operations
-
-1. `sendMessage` with media inputs → `send_file()`
-2. `searchChatMessages` with filters → `list_media()` / `list_files()`
-3. `downloadFile` → `download_file()`
-4. File type detection and mode handling
-5. Progress tracking for large files
-
-### Phase 4: Testing & Integration
-
-1. Write comprehensive unit tests
-2. Create TDLib mock for testing
-3. Integration tests with real Telegram
-4. FUSE handler implementation
-5. End-to-end VFS testing
-
-### Phase 5: Polish & Optimisation
-
-1. Error handling refinement
-2. Cache performance optimisation
-3. Batch operations
-4. Memory management
-5. Documentation updates
 
 ## Design Decisions
 
@@ -582,14 +583,20 @@ Implement TDLib integration for:
 - **Flexibility**: AUTO mode for convenience
 - **VFS pattern**: Matches filesystem metaphor
 
+### Why Upload Deduplication?
+
+- **Efficiency**: Avoids re-uploading identical files to Telegram servers
+- **Multi-chat sends**: Same file can be sent to multiple chats quickly
+- **Hash-based**: SHA256 ensures content identity
+- **Async-friendly**: Cache populated on upload success
+
 ## Conclusion
 
-The TG wrapper provides a solid foundation for integrating Telegram into a FUSE filesystem:
+The TG wrapper provides a complete foundation for integrating Telegram into a FUSE filesystem:
 
-- ✅ **Complete infrastructure** ready for TDLib integration
+- ✅ **Complete infrastructure** with full TDLib integration
 - ✅ **Modern C++20** with coroutines and strong typing
 - ✅ **Persistent caching** for offline capabilities
 - ✅ **Clean API** designed for VFS operations
-- ⏳ **Stub implementations** awaiting TDLib calls
-
-The next phase involves replacing stubs with actual TDLib API calls, which is straightforward given the infrastructure in place.
+- ✅ **Upload deduplication** for efficient file sending
+- ✅ **Full FUSE integration** with read/write support
