@@ -40,6 +40,48 @@ ChatType convert_chat_type(const td_api::ChatType& type) {
     }
 }
 
+std::pair<UserStatus, int64_t> convert_user_status(const td_api::UserStatus* status) {
+    if (!status) {
+        return {UserStatus::UNKNOWN, 0};
+    }
+
+    switch (status->get_id()) {
+        case td_api::userStatusOnline::ID:
+            return {UserStatus::ONLINE, std::time(nullptr)};
+        case td_api::userStatusOffline::ID: {
+            auto& offline = static_cast<const td_api::userStatusOffline&>(*status);
+            return {UserStatus::OFFLINE, offline.was_online_};
+        }
+        case td_api::userStatusRecently::ID:
+            return {UserStatus::RECENTLY, 0};
+        case td_api::userStatusLastWeek::ID:
+            return {UserStatus::LAST_WEEK, 0};
+        case td_api::userStatusLastMonth::ID:
+            return {UserStatus::LAST_MONTH, 0};
+        case td_api::userStatusEmpty::ID:
+        default:
+            return {UserStatus::UNKNOWN, 0};
+    }
+}
+
+User convert_user(const td_api::user& user) {
+    User result;
+    result.id = user.id_;
+    if (user.usernames_ && !user.usernames_->active_usernames_.empty()) {
+        result.username = user.usernames_->active_usernames_[0];
+    }
+    result.first_name = user.first_name_;
+    result.last_name = user.last_name_;
+    result.phone_number = user.phone_number_;
+    result.is_contact = user.is_contact_;
+
+    auto [status, last_seen] = convert_user_status(user.status_.get());
+    result.status = status;
+    result.last_seen = last_seen;
+
+    return result;
+}
+
 MediaType convert_message_content_type(const td_api::MessageContent& content) {
     switch (content.get_id()) {
         case td_api::messagePhoto::ID:
@@ -251,18 +293,32 @@ public:
 
         spdlog::info("Stopping TelegramClient");
 
-        // Send close request first, while update thread is still running
-        td::ClientManager::get_manager_singleton()->send(client_id_, 0, td_api::make_object<td_api::close>());
+        // Send close request using a proper query_id
+        send_query(td_api::make_object<td_api::close>(), [](auto response) {
+            spdlog::debug("Close request acknowledged");
+        });
 
-        // Give TDLib a moment to process the close
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-        // Now stop the update thread
-        running_ = false;
-
+        // Wait for the update thread to finish with a timeout
+        // The update thread exits when authorizationStateClosed is received
         if (update_thread_.joinable()) {
+            // Use a timed wait instead of blocking forever
+            auto start = std::chrono::steady_clock::now();
+            constexpr auto timeout = std::chrono::seconds(5);
+
+            while (running_ && std::chrono::steady_clock::now() - start < timeout) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            // Force stop if timeout exceeded
+            if (running_) {
+                spdlog::warn("TelegramClient shutdown timeout, forcing stop");
+                running_ = false;
+            }
+
             update_thread_.join();
         }
+
+        spdlog::info("TelegramClient stopped");
     }
 
     // Send a query to TDLib and register a callback
@@ -348,7 +404,9 @@ public:
                 auto chat_update = td::move_tl_object_as<td_api::updateNewChat>(update);
                 auto chat = convert_chat(*chat_update->chat_);
                 cache_->cache_chat(chat);
-                spdlog::debug("New chat cached: {}", chat.id);
+                spdlog::debug(
+                    "updateNewChat: id={} type={} title='{}'", chat.id, static_cast<int>(chat.type), chat.title
+                );
                 break;
             }
 
@@ -356,12 +414,31 @@ public:
                 auto message_update = td::move_tl_object_as<td_api::updateNewMessage>(update);
                 auto message = convert_message(*message_update->message_);
                 cache_->cache_message(message);
-                spdlog::debug("New message cached: {} in chat {}", message.id, message.chat_id);
+                spdlog::debug("updateNewMessage: id={} chat={}", message.id, message.chat_id);
+                break;
+            }
+
+            case td_api::updateUser::ID: {
+                auto user_update = td::move_tl_object_as<td_api::updateUser>(update);
+                auto user = convert_user(*user_update->user_);
+                cache_->cache_user(user);
+                spdlog::debug("updateUser: id={} @{} '{}'", user.id, user.username, user.display_name());
+                break;
+            }
+
+            case td_api::updateChatLastMessage::ID: {
+                // Chat's last message updated - we can update our cache
+                auto msg_update = td::move_tl_object_as<td_api::updateChatLastMessage>(update);
+                if (msg_update->last_message_) {
+                    auto message = convert_message(*msg_update->last_message_);
+                    cache_->cache_message(message);
+                    spdlog::debug("updateChatLastMessage: chat={} msg={}", msg_update->chat_id_, message.id);
+                }
                 break;
             }
 
             default:
-                spdlog::trace("Unhandled update type: {}", update->get_id());
+                spdlog::trace("Unhandled update: {}", update->get_id());
                 break;
         }
     }
@@ -450,29 +527,11 @@ public:
         });
     }
 
-    // Get all chats
+    // Get all chats from cache (no API calls - uses data from updateNewChat events)
     std::vector<Chat> get_all_chats_sync() {
-        std::vector<Chat> result;
-
-        // Get loaded chats from TDLib
-        auto response = send_query_sync(td_api::make_object<td_api::getChats>(nullptr, 1000));
-
-        if (response->get_id() == td_api::chats::ID) {
-            auto chats_obj = td::move_tl_object_as<td_api::chats>(response);
-
-            for (auto chat_id : chats_obj->chat_ids_) {
-                auto chat_response = send_query_sync(td_api::make_object<td_api::getChat>(chat_id));
-
-                if (chat_response->get_id() == td_api::chat::ID) {
-                    auto chat_obj = td::move_tl_object_as<td_api::chat>(chat_response);
-                    auto chat = convert_chat(*chat_obj);
-                    cache_->cache_chat(chat);
-                    result.push_back(std::move(chat));
-                }
-            }
-        }
-
-        return result;
+        // TDLib populates chats via updateNewChat during startup.
+        // We just read from our cache - no API calls needed.
+        return cache_->get_all_cached_chats();
     }
 
     // Search for a public chat by username
@@ -601,6 +660,91 @@ public:
         }
 
         throw FileUploadException(path);
+    }
+
+    // Get the current logged-in user
+    User get_me_sync() {
+        auto response = send_query_sync(td_api::make_object<td_api::getMe>());
+
+        if (response->get_id() != td_api::user::ID) {
+            throw TelegramException("Failed to get current user");
+        }
+
+        auto user_obj = td::move_tl_object_as<td_api::user>(response);
+        return convert_user(*user_obj);
+    }
+
+    // Get user by ID
+    std::optional<User> get_user_sync(int64_t user_id) {
+        auto response = send_query_sync(td_api::make_object<td_api::getUser>(user_id));
+
+        if (response->get_id() != td_api::user::ID) {
+            return std::nullopt;
+        }
+
+        auto user_obj = td::move_tl_object_as<td_api::user>(response);
+        auto user = convert_user(*user_obj);
+
+        // Try to get full user info for bio
+        auto full_response = send_query_sync(td_api::make_object<td_api::getUserFullInfo>(user_id));
+        if (full_response->get_id() == td_api::userFullInfo::ID) {
+            auto full_info = td::move_tl_object_as<td_api::userFullInfo>(full_response);
+            if (full_info->bio_) {
+                user.bio = full_info->bio_->text_;
+            }
+        }
+
+        return user;
+    }
+
+    // Get all users from private chats (reads from cache - no API calls)
+    std::vector<User> get_users_sync() {
+        std::vector<User> result;
+
+        // TDLib populates our cache via updateNewChat and updateUser during startup.
+        // No need to call getChats - just read from cache.
+
+        // Read private chats from cache
+        auto cached_chats = cache_->get_cached_chats_by_type(ChatType::PRIVATE);
+        spdlog::debug("Found {} private chats in cache", cached_chats.size());
+
+        for (const auto& chat : cached_chats) {
+            // For private chats, user_id equals positive chat_id
+            int64_t user_id = chat.id > 0 ? chat.id : -chat.id;
+
+            // Try to get full user info from cache (populated by updateUser)
+            auto cached_user = cache_->get_cached_user(user_id);
+
+            User user;
+            if (cached_user) {
+                user = *cached_user;
+            } else {
+                // Fallback: use chat info
+                user.id = user_id;
+                user.first_name = chat.title;
+            }
+
+            // Always use chat's last_message info
+            user.last_message_id = chat.last_message_id;
+            user.last_message_timestamp = chat.last_message_timestamp;
+
+            result.push_back(std::move(user));
+        }
+
+        spdlog::info("Retrieved {} users from cache", result.size());
+        return result;
+    }
+
+    // Get user bio (separate call to avoid rate limiting during bulk load)
+    std::string get_user_bio_sync(int64_t user_id) {
+        auto response = send_query_sync(td_api::make_object<td_api::getUserFullInfo>(user_id));
+        if (response->get_id() == td_api::userFullInfo::ID) {
+            auto full_info = td::move_tl_object_as<td_api::userFullInfo>(response);
+            if (full_info->bio_) {
+                return full_info->bio_->text_;
+            }
+        }
+        return "";
     }
 
     // Download file
@@ -754,10 +898,7 @@ Task<void> TelegramClient::logout() {
     co_return;
 }
 
-Task<std::vector<User>> TelegramClient::get_users() {
-    // TODO: Implement using getContacts
-    co_return std::vector<User>();
-}
+Task<std::vector<User>> TelegramClient::get_users() { co_return impl_->get_users_sync(); }
 
 Task<std::vector<Chat>> TelegramClient::get_groups() {
     auto all_chats = co_await get_all_chats();
@@ -799,10 +940,9 @@ Task<std::optional<Chat>> TelegramClient::resolve_username(const std::string& us
 
 Task<std::optional<Chat>> TelegramClient::get_chat(int64_t chat_id) { co_return impl_->get_chat_sync(chat_id); }
 
-Task<std::optional<User>> TelegramClient::get_user(int64_t user_id) {
-    // TODO: Implement using getUser
-    co_return std::nullopt;
-}
+Task<std::optional<User>> TelegramClient::get_user(int64_t user_id) { co_return impl_->get_user_sync(user_id); }
+
+Task<User> TelegramClient::get_me() { co_return impl_->get_me_sync(); }
 
 Task<Message> TelegramClient::send_text(int64_t chat_id, const std::string& text) {
     co_return impl_->send_text_message_sync(chat_id, text);
@@ -880,5 +1020,7 @@ Task<ChatStatus> TelegramClient::get_chat_status(int64_t chat_id) {
 
     co_return ChatStatus{0, 0};
 }
+
+Task<std::string> TelegramClient::get_user_bio(int64_t user_id) { co_return impl_->get_user_bio_sync(user_id); }
 
 }  // namespace tg
