@@ -12,7 +12,7 @@ namespace tgfuse::ctl {
 namespace {
 
 /// Get the path to the cache database
-std::filesystem::path get_cache_db_path() { return get_data_dir() / "tdlib" / "cache.db"; }
+std::filesystem::path get_cache_db_path() { return get_data_dir() / "cache" / "cache.db"; }
 
 /// Find chat ID by entity name (username or display name) using cached data
 /// Returns 0 if not found
