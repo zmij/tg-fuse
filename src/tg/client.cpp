@@ -224,6 +224,11 @@ Chat convert_chat(const td_api::chat& chat) {
         result.last_message_timestamp = chat.last_message_->date_;
     }
 
+    // Extract permissions - check if user can send basic messages
+    if (chat.permissions_) {
+        result.can_send_messages = chat.permissions_->can_send_basic_messages_;
+    }
+
     // Extract username if available
     // Note: TDLib doesn't directly provide username in chat object,
     // we'll need to get it from the user/supergroup info
@@ -407,6 +412,14 @@ public:
                 spdlog::debug(
                     "updateNewChat: id={} type={} title='{}'", chat.id, static_cast<int>(chat.type), chat.title
                 );
+
+                // Notify callback if set
+                {
+                    std::lock_guard<std::mutex> lock(chat_callback_mutex_);
+                    if (chat_callback_) {
+                        chat_callback_(chat);
+                    }
+                }
                 break;
             }
 
@@ -431,6 +444,14 @@ public:
                 auto user = convert_user(*user_update->user_);
                 cache_->cache_user(user);
                 spdlog::debug("updateUser: id={} @{} '{}'", user.id, user.username, user.display_name());
+
+                // Notify callback if set
+                {
+                    std::lock_guard<std::mutex> lock(user_callback_mutex_);
+                    if (user_callback_) {
+                        user_callback_(user);
+                    }
+                }
                 break;
             }
 
@@ -644,6 +665,26 @@ public:
         // TDLib populates chats via updateNewChat during startup.
         // We just read from our cache - no API calls needed.
         return cache_->get_all_cached_chats();
+    }
+
+    // Preload chats - triggers updateNewChat events for all chats
+    void preload_chats_sync(int32_t limit) {
+        spdlog::debug("Preloading chats (limit={})", limit);
+
+        // loadChats triggers TDLib to send updateNewChat events for chats
+        // This is much faster than calling getChat for each chat individually
+        auto response =
+            send_query_sync(td_api::make_object<td_api::loadChats>(td_api::make_object<td_api::chatListMain>(), limit));
+
+        if (response->get_id() == td_api::ok::ID) {
+            spdlog::debug("loadChats completed successfully");
+        } else if (response->get_id() == td_api::error::ID) {
+            auto error = td::move_tl_object_as<td_api::error>(response);
+            // Error 404 means no more chats to load - that's fine
+            if (error->code_ != 404) {
+                spdlog::warn("loadChats error: {} ({})", error->message_, error->code_);
+            }
+        }
     }
 
     // Search for a public chat by username
@@ -1249,6 +1290,14 @@ private:
     std::function<void(const Message&)> message_callback_;
     std::mutex message_callback_mutex_;
 
+    // Chat callback (for updateNewChat events)
+    std::function<void(const Chat&)> chat_callback_;
+    std::mutex chat_callback_mutex_;
+
+    // User callback (for updateUser events)
+    std::function<void(const User&)> user_callback_;
+    std::mutex user_callback_mutex_;
+
     // Pending upload tracking for deduplication cache
     struct PendingUploadInfo {
         std::string temp_path;
@@ -1263,12 +1312,22 @@ public:
         std::lock_guard<std::mutex> lock(message_callback_mutex_);
         message_callback_ = std::move(callback);
     }
+
+    void set_chat_callback(std::function<void(const Chat&)> callback) {
+        std::lock_guard<std::mutex> lock(chat_callback_mutex_);
+        chat_callback_ = std::move(callback);
+    }
+
+    void set_user_callback(std::function<void(const User&)> callback) {
+        std::lock_guard<std::mutex> lock(user_callback_mutex_);
+        user_callback_ = std::move(callback);
+    }
 };
 
 // TelegramClient implementation
 TelegramClient::TelegramClient(const Config& config)
     : config_(config),
-      cache_(std::make_unique<CacheManager>(config.database_directory + "/cache.db")),
+      cache_(std::make_unique<CacheManager>(config.cache_directory + "/cache.db")),
       impl_(std::make_unique<Impl>(config, cache_.get())) {}
 
 TelegramClient::~TelegramClient() = default;
@@ -1334,6 +1393,11 @@ Task<std::vector<Chat>> TelegramClient::get_channels() {
 }
 
 Task<std::vector<Chat>> TelegramClient::get_all_chats() { co_return impl_->get_all_chats_sync(); }
+
+Task<void> TelegramClient::preload_chats(int32_t limit) {
+    impl_->preload_chats_sync(limit);
+    co_return;
+}
 
 Task<std::optional<Chat>> TelegramClient::resolve_username(const std::string& username) {
     // Remove @ or # prefix if present
@@ -1420,5 +1484,9 @@ Task<std::string> TelegramClient::get_user_bio(int64_t user_id) { co_return impl
 void TelegramClient::set_message_callback(MessageCallback callback) {
     impl_->set_message_callback(std::move(callback));
 }
+
+void TelegramClient::set_chat_callback(ChatCallback callback) { impl_->set_chat_callback(std::move(callback)); }
+
+void TelegramClient::set_user_callback(UserCallback callback) { impl_->set_user_callback(std::move(callback)); }
 
 }  // namespace tg

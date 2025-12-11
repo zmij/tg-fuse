@@ -17,6 +17,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -178,7 +179,9 @@ int main(int argc, char* argv[]) {
         config.api_id = api_id;
         config.api_hash = api_hash;
         config.database_directory = "/tmp/tg-fuse-example";
+        config.cache_directory = "/tmp/tg-fuse-example/cache";
         config.files_directory = "/tmp/tg-fuse-example/files";
+        std::filesystem::create_directories(config.cache_directory);
 
         spdlog::info("Initializing TelegramClient...");
         spdlog::info("Database: {}", config.database_directory);
