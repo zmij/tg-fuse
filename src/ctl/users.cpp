@@ -24,10 +24,12 @@ tg::TelegramClient::Config make_client_config(const Config& config) {
     client_config.api_id = config.api_id;
     client_config.api_hash = config.api_hash;
     client_config.database_directory = (data_dir / "tdlib").string();
+    client_config.cache_directory = (data_dir / "cache").string();
     client_config.files_directory = (data_dir / "files").string();
     client_config.logs_directory = (data_dir / "logs").string();
 
     std::filesystem::create_directories(client_config.database_directory);
+    std::filesystem::create_directories(client_config.cache_directory);
     std::filesystem::create_directories(client_config.files_directory);
 
     return client_config;
