@@ -100,7 +100,6 @@ FetchContent_Declare(
     tdlib
     GIT_REPOSITORY https://github.com/tdlib/td.git
     GIT_TAG master
-    GIT_PROGRESS TRUE
     SOURCE_DIR ${DEPS_SOURCE_DIR}/tdlib
 )
 
