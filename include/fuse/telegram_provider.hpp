@@ -50,28 +50,41 @@ private:
     enum class PathCategory {
         NOT_FOUND,  // Default value - path not recognised
         ROOT,
-        USERS_DIR,         // /users
-        CONTACTS_DIR,      // /contacts
-        GROUPS_DIR,        // /groups
-        CHANNELS_DIR,      // /channels
-        USER_DIR,          // /users/alice
-        USER_INFO,         // /users/alice/.info
-        USER_MESSAGES,     // /users/alice/messages
-        GROUP_DIR,         // /groups/dev_chat
-        GROUP_INFO,        // /groups/dev_chat/.info
-        GROUP_MESSAGES,    // /groups/dev_chat/messages
-        CHANNEL_DIR,       // /channels/news
-        CHANNEL_INFO,      // /channels/news/.info
-        CHANNEL_MESSAGES,  // /channels/news/messages
-        CONTACT_SYMLINK,   // /contacts/alice
-        ROOT_SYMLINK,      // /@alice
-        SELF_SYMLINK       // /self
+        USERS_DIR,          // /users
+        CONTACTS_DIR,       // /contacts
+        GROUPS_DIR,         // /groups
+        CHANNELS_DIR,       // /channels
+        USER_DIR,           // /users/alice
+        USER_INFO,          // /users/alice/.info
+        USER_MESSAGES,      // /users/alice/messages
+        USER_FILES_DIR,     // /users/alice/files
+        USER_FILE,          // /users/alice/files/20241205-1430-report.pdf
+        USER_MEDIA_DIR,     // /users/alice/media
+        USER_MEDIA,         // /users/alice/media/20241205-1430-photo.jpg
+        GROUP_DIR,          // /groups/dev_chat
+        GROUP_INFO,         // /groups/dev_chat/.info
+        GROUP_MESSAGES,     // /groups/dev_chat/messages
+        GROUP_FILES_DIR,    // /groups/dev_chat/files
+        GROUP_FILE,         // /groups/dev_chat/files/...
+        GROUP_MEDIA_DIR,    // /groups/dev_chat/media
+        GROUP_MEDIA,        // /groups/dev_chat/media/...
+        CHANNEL_DIR,        // /channels/news
+        CHANNEL_INFO,       // /channels/news/.info
+        CHANNEL_MESSAGES,   // /channels/news/messages
+        CHANNEL_FILES_DIR,  // /channels/news/files
+        CHANNEL_FILE,       // /channels/news/files/...
+        CHANNEL_MEDIA_DIR,  // /channels/news/media
+        CHANNEL_MEDIA,      // /channels/news/media/...
+        CONTACT_SYMLINK,    // /contacts/alice
+        ROOT_SYMLINK,       // /@alice
+        SELF_SYMLINK        // /self
     };
 
     /// Parsed path information
     struct PathInfo {
         PathCategory category{PathCategory::NOT_FOUND};
-        std::string entity_name;  // Username or display name
+        std::string entity_name;      // Username or display name
+        std::string file_entry_name;  // For file paths: "20241205-1430-report.pdf"
     };
 
     /// Parse a path into its components
@@ -146,11 +159,43 @@ private:
     /// Check if a path category is a messages file
     [[nodiscard]] bool is_messages_path(PathCategory category) const;
 
+    /// Check if a path category is a files directory
+    [[nodiscard]] bool is_files_dir_path(PathCategory category) const;
+
+    /// Check if a path category is a file entry
+    [[nodiscard]] bool is_file_path(PathCategory category) const;
+
+    /// Check if a path category is a media directory
+    [[nodiscard]] bool is_media_dir_path(PathCategory category) const;
+
+    /// Check if a path category is a media entry
+    [[nodiscard]] bool is_media_path(PathCategory category) const;
+
     /// Estimate messages file size from cache
     [[nodiscard]] std::size_t estimate_messages_size(int64_t chat_id) const;
 
+    /// Format a file entry name with timestamp prefix (YYYYMMDD-HHMM-filename)
+    [[nodiscard]] std::string format_file_entry_name(const tg::FileListItem& item) const;
+
+    /// Parse a file entry name back to original filename and timestamp
+    [[nodiscard]] std::optional<std::pair<std::string, int64_t>> parse_file_entry_name(
+        const std::string& entry_name
+    ) const;
+
+    /// Find a FileListItem by its formatted entry name
+    [[nodiscard]] const tg::FileListItem* find_file_by_entry_name(int64_t chat_id, const std::string& entry_name);
+
+    /// Ensure files are loaded for a chat (lazy loading from API)
+    void ensure_files_loaded(int64_t chat_id);
+
+    /// Get chat ID from path info for files categories
+    [[nodiscard]] int64_t get_chat_id_for_files(const PathInfo& info) const;
+
     /// Send a message to a chat, handling large messages
     [[nodiscard]] WriteResult send_message(int64_t chat_id, const char* data, std::size_t size);
+
+    /// Download a file and read its content
+    [[nodiscard]] FileContent download_and_read_file(const tg::FileListItem& file);
 
     tg::TelegramClient& client_;
 

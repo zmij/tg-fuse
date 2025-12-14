@@ -114,7 +114,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
             if (!photo.photo_->sizes_.empty()) {
                 auto& largest = photo.photo_->sizes_.back();
                 info.type = MediaType::PHOTO;
-                info.file_id = std::to_string(largest->photo_->id_);
+                info.file_id = largest->photo_->remote_->id_;
                 info.filename = "photo.jpg";
                 info.mime_type = "image/jpeg";
                 info.file_size = largest->photo_->size_;
@@ -127,7 +127,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageVideo::ID: {
             auto& video = static_cast<const td_api::messageVideo&>(content);
             info.type = MediaType::VIDEO;
-            info.file_id = std::to_string(video.video_->video_->id_);
+            info.file_id = video.video_->video_->remote_->id_;
             info.filename = video.video_->file_name_;
             info.mime_type = video.video_->mime_type_;
             info.file_size = video.video_->video_->size_;
@@ -140,7 +140,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageDocument::ID: {
             auto& doc = static_cast<const td_api::messageDocument&>(content);
             info.type = MediaType::DOCUMENT;
-            info.file_id = std::to_string(doc.document_->document_->id_);
+            info.file_id = doc.document_->document_->remote_->id_;
             info.filename = doc.document_->file_name_;
             info.mime_type = doc.document_->mime_type_;
             info.file_size = doc.document_->document_->size_;
@@ -150,7 +150,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageAudio::ID: {
             auto& audio = static_cast<const td_api::messageAudio&>(content);
             info.type = MediaType::AUDIO;
-            info.file_id = std::to_string(audio.audio_->audio_->id_);
+            info.file_id = audio.audio_->audio_->remote_->id_;
             info.filename = audio.audio_->file_name_;
             info.mime_type = audio.audio_->mime_type_;
             info.file_size = audio.audio_->audio_->size_;
@@ -161,7 +161,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageVoiceNote::ID: {
             auto& voice = static_cast<const td_api::messageVoiceNote&>(content);
             info.type = MediaType::VOICE;
-            info.file_id = std::to_string(voice.voice_note_->voice_->id_);
+            info.file_id = voice.voice_note_->voice_->remote_->id_;
             info.filename = "voice.ogg";
             info.mime_type = voice.voice_note_->mime_type_;
             info.file_size = voice.voice_note_->voice_->size_;
@@ -172,7 +172,7 @@ std::optional<MediaInfo> extract_media_info(const td_api::MessageContent& conten
         case td_api::messageAnimation::ID: {
             auto& anim = static_cast<const td_api::messageAnimation&>(content);
             info.type = MediaType::ANIMATION;
-            info.file_id = std::to_string(anim.animation_->animation_->id_);
+            info.file_id = anim.animation_->animation_->remote_->id_;
             info.filename = anim.animation_->file_name_;
             info.mime_type = anim.animation_->mime_type_;
             info.file_size = anim.animation_->animation_->size_;
@@ -684,6 +684,121 @@ public:
         return result;
     }
 
+    // Filter type for search_chat_files_sync
+    enum class FileSearchFilter { DOCUMENT, PHOTO, PHOTO_AND_VIDEO };
+
+    // Max file history to search (1 year default)
+    static constexpr std::chrono::seconds kMaxFileHistoryAge = std::chrono::hours{24 * 365};
+
+    // Helper to create the filter object
+    td_api::object_ptr<td_api::SearchMessagesFilter> make_search_filter(FileSearchFilter filter_type) {
+        switch (filter_type) {
+            case FileSearchFilter::DOCUMENT:
+                return td_api::make_object<td_api::searchMessagesFilterDocument>();
+            case FileSearchFilter::PHOTO:
+                return td_api::make_object<td_api::searchMessagesFilterPhoto>();
+            case FileSearchFilter::PHOTO_AND_VIDEO:
+                return td_api::make_object<td_api::searchMessagesFilterPhotoAndVideo>();
+            default:
+                return td_api::make_object<td_api::searchMessagesFilterDocument>();
+        }
+    }
+
+    // Search chat messages with a filter (for files, photos, etc.)
+    // Iterates through history up to max_age, respecting rate limits
+    std::vector<FileListItem> search_chat_files_sync(int64_t chat_id, FileSearchFilter filter_type) {
+        std::vector<FileListItem> result;
+        int64_t from_message_id = 0;
+        constexpr int32_t batch_size = 100;
+        int batch_count = 0;
+
+        // Calculate cutoff timestamp
+        auto now = std::chrono::system_clock::now();
+        auto cutoff = now - kMaxFileHistoryAge;
+        auto cutoff_ts = std::chrono::duration_cast<std::chrono::seconds>(cutoff.time_since_epoch()).count();
+
+        spdlog::debug(
+            "search_chat_files_sync: searching chat {} for files newer than {} (cutoff ts: {})",
+            chat_id,
+            kMaxFileHistoryAge.count() / 3600 / 24,
+            cutoff_ts
+        );
+
+        while (true) {
+            auto response = send_query_sync(td_api::make_object<td_api::searchChatMessages>(
+                chat_id,
+                nullptr,  // topic_id
+                "",       // query (empty = all)
+                nullptr,  // sender_id (null = any sender)
+                from_message_id,
+                0,                               // offset
+                batch_size,                      // limit
+                make_search_filter(filter_type)  // filter (recreated each time)
+            ));
+
+            if (response->get_id() != td_api::foundChatMessages::ID) {
+                spdlog::warn("search_chat_files_sync: unexpected response type {}", response->get_id());
+                break;
+            }
+
+            auto found = td::move_tl_object_as<td_api::foundChatMessages>(response);
+            batch_count++;
+
+            if (found->messages_.empty()) {
+                break;
+            }
+
+            bool reached_cutoff = false;
+            for (auto& msg_ptr : found->messages_) {
+                if (!msg_ptr) continue;
+
+                auto message = convert_message(*msg_ptr);
+
+                // Check if we've gone past the cutoff
+                if (message.timestamp < cutoff_ts) {
+                    reached_cutoff = true;
+                    break;
+                }
+
+                if (message.has_media()) {
+                    FileListItem item;
+                    item.message_id = message.id;
+                    item.filename = message.media->filename;
+                    item.file_size = message.media->file_size;
+                    item.timestamp = message.timestamp;
+                    item.type = message.media->type;
+                    item.file_id = message.media->file_id;
+                    result.push_back(std::move(item));
+                }
+            }
+
+            if (reached_cutoff) {
+                spdlog::debug("search_chat_files_sync: reached cutoff after {} batches", batch_count);
+                break;
+            }
+
+            // If we got fewer messages than requested, we've reached the end
+            if (static_cast<int32_t>(found->messages_.size()) < batch_size) {
+                spdlog::debug("search_chat_files_sync: reached end of history after {} batches", batch_count);
+                break;
+            }
+
+            // Set up for next iteration
+            from_message_id = found->next_from_message_id_;
+            if (from_message_id == 0) {
+                break;  // No more messages
+            }
+
+            // Small delay between batches to respect rate limits (50ms)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+
+        spdlog::debug(
+            "search_chat_files_sync: chat {} found {} files in {} batches", chat_id, result.size(), batch_count
+        );
+        return result;
+    }
+
     // Send file
     Message send_file_sync(int64_t chat_id, const std::string& path, SendMode mode) {
         // Determine MIME type and whether to send as photo/video or document
@@ -824,16 +939,18 @@ public:
         return "";
     }
 
-    // Download file
-    std::string download_file_sync(int32_t file_id, const std::string& destination_path) {
-        // First, get the file info
-        auto file_response = send_query_sync(td_api::make_object<td_api::getFile>(file_id));
+    // Download file using remote file ID (persistent string)
+    std::string download_file_sync(const std::string& remote_file_id, const std::string& destination_path) {
+        // First, get the file info using remote ID
+        auto file_response =
+            send_query_sync(td_api::make_object<td_api::getRemoteFile>(remote_file_id, nullptr));
 
         if (file_response->get_id() != td_api::file::ID) {
-            throw FileNotFoundException(std::to_string(file_id));
+            throw FileNotFoundException(remote_file_id);
         }
 
         auto file_obj = td::move_tl_object_as<td_api::file>(file_response);
+        int32_t local_file_id = file_obj->id_;
 
         // Check if already downloaded
         if (file_obj->local_->is_downloading_completed_) {
@@ -848,20 +965,20 @@ public:
             return destination_path;
         }
 
-        // Download the file
+        // Download the file using local file ID
         auto download_response = send_query_sync(
-            td_api::make_object<td_api::downloadFile>(file_id, 32, 0, 0, true),
-            30000  // 30 second timeout for downloads
+            td_api::make_object<td_api::downloadFile>(local_file_id, 32, 0, 0, true),
+            120000  // 2 minute timeout for downloads
         );
 
         if (download_response->get_id() != td_api::file::ID) {
-            throw FileDownloadException(std::to_string(file_id));
+            throw FileDownloadException(remote_file_id);
         }
 
         auto downloaded_file = td::move_tl_object_as<td_api::file>(download_response);
 
         if (!downloaded_file->local_->is_downloading_completed_) {
-            throw FileDownloadException(std::to_string(file_id));
+            throw FileDownloadException(remote_file_id);
         }
 
         std::string source_path = downloaded_file->local_->path_;
@@ -1053,54 +1170,17 @@ Task<Message> TelegramClient::send_file(int64_t chat_id, const std::string& path
 }
 
 Task<std::vector<FileListItem>> TelegramClient::list_media(int64_t chat_id) {
-    // Get messages and filter for media
-    auto messages = co_await get_messages(chat_id, 100);
-    std::vector<FileListItem> result;
-
-    for (const auto& msg : messages) {
-        if (msg.has_media() && is_media_type(msg.media->type)) {
-            FileListItem item;
-            item.message_id = msg.id;
-            item.filename = msg.media->filename;
-            item.file_size = msg.media->file_size;
-            item.timestamp = msg.timestamp;
-            item.type = msg.media->type;
-            item.file_id = msg.media->file_id;
-            result.push_back(std::move(item));
-        }
-    }
-
-    co_return result;
+    // Use searchChatMessages with photo+video filter to get ALL media in chat
+    co_return impl_->search_chat_files_sync(chat_id, Impl::FileSearchFilter::PHOTO_AND_VIDEO);
 }
 
 Task<std::vector<FileListItem>> TelegramClient::list_files(int64_t chat_id) {
-    // Get messages and filter for documents
-    auto messages = co_await get_messages(chat_id, 100);
-    std::vector<FileListItem> result;
-
-    for (const auto& msg : messages) {
-        if (msg.has_media() && is_document_type(msg.media->type)) {
-            FileListItem item;
-            item.message_id = msg.id;
-            item.filename = msg.media->filename;
-            item.file_size = msg.media->file_size;
-            item.timestamp = msg.timestamp;
-            item.type = msg.media->type;
-            item.file_id = msg.media->file_id;
-            result.push_back(std::move(item));
-        }
-    }
-
-    co_return result;
+    // Use searchChatMessages with document filter to get ALL files in chat
+    co_return impl_->search_chat_files_sync(chat_id, Impl::FileSearchFilter::DOCUMENT);
 }
 
 Task<std::string> TelegramClient::download_file(const std::string& file_id, const std::string& destination_path) {
-    try {
-        int32_t file_id_int = std::stoi(file_id);
-        co_return impl_->download_file_sync(file_id_int, destination_path);
-    } catch (const std::exception& e) {
-        throw FileNotFoundException(file_id);
-    }
+    co_return impl_->download_file_sync(file_id, destination_path);
 }
 
 Task<ChatStatus> TelegramClient::get_chat_status(int64_t chat_id) {
