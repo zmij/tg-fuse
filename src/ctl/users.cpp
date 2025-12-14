@@ -8,10 +8,8 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/spdlog.h>
 
-#include <chrono>
 #include <filesystem>
 #include <iostream>
-#include <thread>
 
 namespace tgfuse::ctl {
 
@@ -63,10 +61,7 @@ int exec_users_list() {
     try {
         tg::TelegramClient client(client_config);
 
-        client.start().get_result();
-
-        // Wait for TDLib to initialise
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        client.start().get_result();  // Now waits for TDLib initialization
 
         auto state = client.get_auth_state().get_result();
 

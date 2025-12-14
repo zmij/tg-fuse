@@ -258,6 +258,11 @@ public:
             return;
         }
 
+        // Prepare the initialization promise/future pair
+        init_promise_ = std::promise<void>();
+        init_future_ = init_promise_.get_future();
+        init_completed_ = false;
+
         // Configure TDLib logging before creating the client
         configure_tdlib_logging();
 
@@ -591,24 +596,28 @@ public:
             case td_api::authorizationStateWaitPhoneNumber::ID:
                 spdlog::info("Authorization: waiting for phone number");
                 auth_state_ = AuthState::WAIT_PHONE;
+                complete_initialization();  // TDLib is now ready to accept queries
                 auth_cv_.notify_all();
                 break;
 
             case td_api::authorizationStateWaitCode::ID:
                 spdlog::info("Authorization: waiting for code");
                 auth_state_ = AuthState::WAIT_CODE;
+                complete_initialization();  // TDLib is now ready to accept queries
                 auth_cv_.notify_all();
                 break;
 
             case td_api::authorizationStateWaitPassword::ID:
                 spdlog::info("Authorization: waiting for password");
                 auth_state_ = AuthState::WAIT_PASSWORD;
+                complete_initialization();  // TDLib is now ready to accept queries
                 auth_cv_.notify_all();
                 break;
 
             case td_api::authorizationStateReady::ID:
                 spdlog::info("Authorization: ready");
                 auth_state_ = AuthState::READY;
+                complete_initialization();  // TDLib is now ready to accept queries
                 auth_cv_.notify_all();
                 break;
 
@@ -640,6 +649,18 @@ public:
         if (!auth_cv_.wait_for(lock, timeout, [this, desired_state]() { return auth_state_ == desired_state; })) {
             throw TimeoutException("Waiting for auth state");
         }
+    }
+
+    // Wait for TDLib initialization to complete
+    void wait_initialized(int timeout_ms = 30000) {
+        if (init_completed_) {
+            return;
+        }
+
+        if (init_future_.wait_for(std::chrono::milliseconds(timeout_ms)) == std::future_status::timeout) {
+            throw TimeoutException("TDLib initialization timeout");
+        }
+        init_future_.get();  // Propagate any exception
     }
 
     void send_phone_number(const std::string& phone) {
@@ -1228,6 +1249,17 @@ public:
     }
 
 private:
+    // Signal that TDLib initialization is complete
+    void complete_initialization() {
+        if (!init_completed_.exchange(true)) {
+            try {
+                init_promise_.set_value();
+            } catch (const std::future_error&) {
+                // Promise already satisfied - ignore
+            }
+        }
+    }
+
     void configure_tdlib_logging() {
         // Set log verbosity level
         td::ClientManager::execute(td_api::make_object<td_api::setLogVerbosityLevel>(config_.log_verbosity));
@@ -1286,6 +1318,11 @@ private:
     mutable std::mutex auth_mutex_;
     std::condition_variable auth_cv_;
 
+    // Initialization synchronisation (for start() to wait until TDLib is ready)
+    std::promise<void> init_promise_;
+    std::future<void> init_future_;
+    std::atomic<bool> init_completed_{false};
+
     // Message callback
     std::function<void(const Message&)> message_callback_;
     std::mutex message_callback_mutex_;
@@ -1334,6 +1371,7 @@ TelegramClient::~TelegramClient() = default;
 
 Task<void> TelegramClient::start() {
     impl_->start();
+    impl_->wait_initialized();  // Block until TDLib is ready
     co_return;
 }
 
