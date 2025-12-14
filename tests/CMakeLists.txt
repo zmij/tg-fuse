@@ -3,6 +3,7 @@ add_executable(tg-fuse-tests
     tg/types_test.cpp
     tg/cache_test.cpp
     tg/async_test.cpp
+    tg/client_init_test.cpp
     tg/formatters_test.cpp
     tg/bustache_format_test.cpp
 )
