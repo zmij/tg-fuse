@@ -7,6 +7,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Dependencies source dir to avoid (re-)download sources into build dir
+set(DEPS_SOURCE_DIR "${CMAKE_SOURCE_DIR}/deps" CACHE PATH "Directory for dependency sources")
+
 # Include FetchContent for dependency management
 include(FetchContent)
 
@@ -65,6 +68,7 @@ FetchContent_Declare(
     nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG v3.11.3
+    SOURCE_DIR ${DEPS_SOURCE_DIR}/nlohmann_json
 )
 
 # Fetch spdlog
@@ -72,6 +76,7 @@ FetchContent_Declare(
     spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
     GIT_TAG v1.13.0
+    SOURCE_DIR ${DEPS_SOURCE_DIR}/spdlog
 )
 
 # Fetch CLI11
@@ -79,6 +84,7 @@ FetchContent_Declare(
     cli11
     GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
     GIT_TAG v2.4.1
+    SOURCE_DIR ${DEPS_SOURCE_DIR}/cli11
 )
 
 # Fetch GoogleTest
@@ -86,6 +92,7 @@ FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
     GIT_TAG v1.14.0
+    SOURCE_DIR ${DEPS_SOURCE_DIR}/googletest
 )
 
 # Fetch TDLib
@@ -93,6 +100,7 @@ FetchContent_Declare(
     tdlib
     GIT_REPOSITORY https://github.com/tdlib/td.git
     GIT_TAG master
+    SOURCE_DIR ${DEPS_SOURCE_DIR}/tdlib
 )
 
 # Fetch fmt library
@@ -100,6 +108,8 @@ FetchContent_Declare(
     fmt
     GIT_REPOSITORY https://github.com/fmtlib/fmt.git
     GIT_TAG 10.2.1
+    SOURCE_DIR ${DEPS_SOURCE_DIR}/fmt
+    OVERRIDE_FIND_PACKAGE # bustache tries to find it via find_package
 )
 
 # Fetch bustache (mustache templating)
@@ -109,12 +119,13 @@ FetchContent_Declare(
     bustache
     GIT_REPOSITORY https://github.com/jamboree/bustache.git
     GIT_TAG master
+    SOURCE_DIR ${DEPS_SOURCE_DIR}/bustache
 )
 
 # Find SQLite3 (system library)
 find_package(SQLite3 REQUIRED)
 
-# Make dependencies available (fmt before spdlog since spdlog uses external fmt)
+# Make dependencies available (fmt before spdlog and bustache since they use it)
 FetchContent_MakeAvailable(nlohmann_json fmt spdlog cli11 googletest tdlib bustache)
 
 # Enable testing for our project only (after dependencies are loaded)
