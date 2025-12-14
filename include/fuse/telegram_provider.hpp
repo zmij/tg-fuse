@@ -6,12 +6,14 @@
 #include "tg/types.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace tgfuse {
@@ -24,7 +26,7 @@ namespace tgfuse {
 class TelegramDataProvider : public DataProvider {
 public:
     explicit TelegramDataProvider(tg::TelegramClient& client);
-    ~TelegramDataProvider() override = default;
+    ~TelegramDataProvider() override;
 
     // DataProvider interface implementation
     [[nodiscard]] std::vector<Entry> list_directory(std::string_view path) override;
@@ -86,9 +88,15 @@ private:
         SELF_SYMLINK,       // /self
         UPLOADS_DIR,        // /.uploads (lists pending uploads)
         // Upload categories (for cp operations)
-        USER_UPLOAD,    // /users/alice/newfile.txt (auto-detect)
-        GROUP_UPLOAD,   // /groups/chat/newfile.pdf (auto-detect)
-        CHANNEL_UPLOAD  // /channels/news/newfile.mp4 (auto-detect)
+        USER_UPLOAD,     // /users/alice/newfile.txt (auto-detect)
+        GROUP_UPLOAD,    // /groups/chat/newfile.pdf (auto-detect)
+        CHANNEL_UPLOAD,  // /channels/news/newfile.mp4 (auto-detect)
+        // txt file for sending text messages
+        USER_TXT,     // /users/alice/txt
+        GROUP_TXT,    // /groups/chat/txt
+        CHANNEL_TXT,  // /channels/news/txt
+        TEXT_DIR,     // /text
+        TEXT_SYMLINK  // /text/@alice
     };
 
     /// Parsed path information
@@ -301,6 +309,54 @@ private:
     /// Add pending and completed uploads to directory listing for a given directory path
     void add_uploads_to_listing(std::string_view dir_path, std::vector<Entry>& entries) const;
 
+    // txt file state for streaming writes
+    struct TxtWriteState {
+        std::string buffer;               // Write buffer for streaming
+        std::string last_sent_content;    // For reading back
+        int64_t last_sent_message_id{0};  // For future edit support
+        std::chrono::steady_clock::time_point last_send_time;
+        std::chrono::steady_clock::time_point last_write_time;  // For timeout-based flushing
+    };
+    std::map<int64_t, TxtWriteState> txt_states_;
+    mutable std::mutex txt_states_mutex_;
+
+    // Background flusher for txt buffers (flushes after write timeout)
+    std::thread txt_flusher_thread_;
+    std::atomic<bool> txt_flusher_running_{false};
+    std::condition_variable txt_flusher_cv_;
+    mutable std::mutex txt_flusher_mutex_;
+
+    /// Start the background txt buffer flusher thread
+    void start_txt_flusher();
+
+    /// Stop the background txt buffer flusher thread
+    void stop_txt_flusher();
+
+    /// Background flusher thread function
+    void txt_flusher_loop();
+
+    /// Check if a path category is a txt file
+    [[nodiscard]] bool is_txt_path(PathCategory category) const;
+
+    /// Get chat ID for txt file operations
+    [[nodiscard]] int64_t get_chat_id_for_txt(const PathInfo& info) const;
+
+    /// Get or create txt state for a chat
+    [[nodiscard]] TxtWriteState& get_or_create_txt_state(int64_t chat_id);
+
+    /// Process txt buffer - send if >= 4096 bytes or force_flush is true
+    /// @return number of bytes consumed from buffer
+    std::size_t process_txt_buffer(int64_t chat_id, bool force_flush);
+
+    /// Find valid UTF-8 boundary at or before max_pos
+    [[nodiscard]] std::size_t find_utf8_boundary(const std::string& str, std::size_t max_pos) const;
+
+    /// Get txt file size (for getattr)
+    [[nodiscard]] std::size_t get_txt_file_size(int64_t chat_id) const;
+
+    /// Write to txt file (streaming buffer)
+    [[nodiscard]] WriteResult write_txt_file(const PathInfo& info, const char* data, std::size_t size);
+
     mutable std::mutex mutex_;
 
     /// Create user resolver function for message formatting
@@ -311,6 +367,15 @@ private:
 
     /// Set up message callback to update cache on new messages
     void setup_message_callback();
+
+    /// Set up chat callback to invalidate cache on new chats
+    void setup_chat_callback();
+
+    /// Set up user callback to invalidate cache on new users
+    void setup_user_callback();
+
+    /// Preload data at startup (current user and chats)
+    void preload_data();
 };
 
 }  // namespace tgfuse
