@@ -7,7 +7,9 @@ out/
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
+CMakeUserPresets.json
 cmake_install.cmake
+compile_commands.json
 install_manifest.txt
 CTestTestfile.cmake
 Testing/
@@ -48,6 +50,7 @@ tg-fuse
 *.pdb
 
 # Dependency files
+deps/
 *.d
 
 # Core dumps
@@ -90,3 +93,5 @@ tdlib/
 # Claude local settings
 .claude
 
+# Others
+.cache/
