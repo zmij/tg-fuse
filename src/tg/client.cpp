@@ -445,6 +445,110 @@ public:
                 break;
             }
 
+            case td_api::updateMessageSendSucceeded::ID: {
+                auto send_update = td::move_tl_object_as<td_api::updateMessageSendSucceeded>(update);
+                int64_t old_msg_id = send_update->old_message_id_;
+                spdlog::debug(
+                    "updateMessageSendSucceeded: old_id={} new_id={}", old_msg_id, send_update->message_->id_
+                );
+
+                // Clean up temp file and cache remote file ID if we were tracking this message
+                {
+                    std::lock_guard<std::mutex> lock(pending_uploads_mutex_);
+                    auto it = pending_upload_files_.find(old_msg_id);
+                    if (it != pending_upload_files_.end()) {
+                        const auto& upload_info = it->second;
+
+                        // Extract remote file ID from message content and cache it
+                        if (!upload_info.file_hash.empty() && send_update->message_->content_) {
+                            std::string remote_file_id;
+                            auto* content = send_update->message_->content_.get();
+
+                            // Extract file ID based on content type
+                            switch (content->get_id()) {
+                                case td_api::messageDocument::ID: {
+                                    auto* doc = static_cast<td_api::messageDocument*>(content);
+                                    if (doc->document_ && doc->document_->document_ &&
+                                        doc->document_->document_->remote_) {
+                                        remote_file_id = doc->document_->document_->remote_->id_;
+                                    }
+                                    break;
+                                }
+                                case td_api::messagePhoto::ID: {
+                                    auto* photo = static_cast<td_api::messagePhoto*>(content);
+                                    if (photo->photo_ && !photo->photo_->sizes_.empty()) {
+                                        // Use the largest size
+                                        auto& largest = photo->photo_->sizes_.back();
+                                        if (largest->photo_ && largest->photo_->remote_) {
+                                            remote_file_id = largest->photo_->remote_->id_;
+                                        }
+                                    }
+                                    break;
+                                }
+                                case td_api::messageVideo::ID: {
+                                    auto* video = static_cast<td_api::messageVideo*>(content);
+                                    if (video->video_ && video->video_->video_ && video->video_->video_->remote_) {
+                                        remote_file_id = video->video_->video_->remote_->id_;
+                                    }
+                                    break;
+                                }
+                                case td_api::messageAnimation::ID: {
+                                    auto* anim = static_cast<td_api::messageAnimation*>(content);
+                                    if (anim->animation_ && anim->animation_->animation_ &&
+                                        anim->animation_->animation_->remote_) {
+                                        remote_file_id = anim->animation_->animation_->remote_->id_;
+                                    }
+                                    break;
+                                }
+                                default:
+                                    break;
+                            }
+
+                            if (!remote_file_id.empty()) {
+                                cache_->cache_upload(upload_info.file_hash, upload_info.file_size, remote_file_id);
+                                spdlog::debug(
+                                    "Cached upload: hash={} size={} remote_id={}",
+                                    upload_info.file_hash.substr(0, 16) + "...",
+                                    upload_info.file_size,
+                                    remote_file_id.substr(0, 32) + "..."
+                                );
+                            }
+                        }
+
+                        // Clean up temp file
+                        std::error_code ec;
+                        std::filesystem::remove(upload_info.temp_path, ec);
+                        spdlog::debug("Cleaned up temp file after upload: {}", upload_info.temp_path);
+                        pending_upload_files_.erase(it);
+                    }
+                }
+                break;
+            }
+
+            case td_api::updateMessageSendFailed::ID: {
+                auto fail_update = td::move_tl_object_as<td_api::updateMessageSendFailed>(update);
+                int64_t old_msg_id = fail_update->old_message_id_;
+                spdlog::warn(
+                    "updateMessageSendFailed: old_id={} error=[{}] {}",
+                    old_msg_id,
+                    fail_update->error_->code_,
+                    fail_update->error_->message_
+                );
+
+                // Clean up temp file on failure too
+                {
+                    std::lock_guard<std::mutex> lock(pending_uploads_mutex_);
+                    auto it = pending_upload_files_.find(old_msg_id);
+                    if (it != pending_upload_files_.end()) {
+                        std::error_code ec;
+                        std::filesystem::remove(it->second.temp_path, ec);
+                        spdlog::debug("Cleaned up temp file after failed upload: {}", it->second.temp_path);
+                        pending_upload_files_.erase(it);
+                    }
+                }
+                break;
+            }
+
             default:
                 spdlog::trace("Unhandled update: {}", update->get_id());
                 break;
@@ -725,16 +829,18 @@ public:
         );
 
         while (true) {
-            auto response = send_query_sync(td_api::make_object<td_api::searchChatMessages>(
-                chat_id,
-                nullptr,  // topic_id
-                "",       // query (empty = all)
-                nullptr,  // sender_id (null = any sender)
-                from_message_id,
-                0,                               // offset
-                batch_size,                      // limit
-                make_search_filter(filter_type)  // filter (recreated each time)
-            ));
+            auto response = send_query_sync(
+                td_api::make_object<td_api::searchChatMessages>(
+                    chat_id,
+                    nullptr,  // topic_id
+                    "",       // query (empty = all)
+                    nullptr,  // sender_id (null = any sender)
+                    from_message_id,
+                    0,                               // offset
+                    batch_size,                      // limit
+                    make_search_filter(filter_type)  // filter (recreated each time)
+                )
+            );
 
             if (response->get_id() != td_api::foundChatMessages::ID) {
                 spdlog::warn("search_chat_files_sync: unexpected response type {}", response->get_id());
@@ -799,8 +905,14 @@ public:
         return result;
     }
 
-    // Send file
-    Message send_file_sync(int64_t chat_id, const std::string& path, SendMode mode) {
+    // Send file (with optional hash for deduplication cache)
+    Message send_file_sync(
+        int64_t chat_id,
+        const std::string& path,
+        SendMode mode,
+        const std::string& file_hash = "",
+        int64_t file_size = 0
+    ) {
         // Determine MIME type and whether to send as photo/video or document
         auto mime = detect_mime_type(path);
         auto detected_type = detect_media_type(fs::path(path).filename().string(), mime);
@@ -848,9 +960,30 @@ public:
             auto msg_obj = td::move_tl_object_as<td_api::message>(response);
             auto message = convert_message(*msg_obj);
             cache_->cache_message(message);
+
+            // Register pending upload - file cleanup and cache update happen in updateMessageSendSucceeded
+            {
+                std::lock_guard<std::mutex> lock(pending_uploads_mutex_);
+                pending_upload_files_[message.id] = PendingUploadInfo{path, file_hash, file_size};
+                spdlog::debug(
+                    "Registered pending upload: msg_id={} path={} hash={}",
+                    message.id,
+                    path,
+                    file_hash.empty() ? "(none)" : file_hash.substr(0, 16) + "..."
+                );
+            }
+
             return message;
         }
 
+        // Log error details if available
+        if (response->get_id() == td_api::error::ID) {
+            auto error = td::move_tl_object_as<td_api::error>(response);
+            spdlog::error("TDLib error sending file {}: [{}] {}", path, error->code_, error->message_);
+            throw FileUploadException(path + " (TDLib error: " + error->message_ + ")");
+        }
+
+        spdlog::error("Unexpected response type {} when sending file {}", response->get_id(), path);
         throw FileUploadException(path);
     }
 
@@ -939,11 +1072,72 @@ public:
         return "";
     }
 
+    // Send file using remote file ID (for deduplication/reuse)
+    Message send_file_by_id_sync(
+        int64_t chat_id,
+        const std::string& remote_file_id,
+        const std::string& filename,
+        SendMode mode
+    ) {
+        auto input_file = td_api::make_object<td_api::inputFileRemote>(remote_file_id);
+
+        td_api::object_ptr<td_api::InputMessageContent> input_content;
+
+        if (mode == SendMode::MEDIA) {
+            // Detect media type from filename
+            auto detected_type = detect_media_type(filename, detect_mime_type(filename));
+
+            if (detected_type == MediaType::PHOTO) {
+                input_content = td_api::make_object<td_api::inputMessagePhoto>(
+                    std::move(input_file), nullptr, std::vector<int32_t>(), 0, 0, nullptr, false, nullptr, false
+                );
+            } else if (detected_type == MediaType::VIDEO || detected_type == MediaType::ANIMATION) {
+                input_content = td_api::make_object<td_api::inputMessageVideo>(
+                    std::move(input_file),
+                    nullptr,
+                    nullptr,
+                    0,
+                    std::vector<int32_t>(),
+                    0,
+                    0,
+                    0,
+                    false,
+                    nullptr,
+                    false,
+                    nullptr,
+                    false
+                );
+            } else {
+                // Fallback to document for other media types
+                input_content =
+                    td_api::make_object<td_api::inputMessageDocument>(std::move(input_file), nullptr, false, nullptr);
+            }
+        } else {
+            // Send as document
+            input_content =
+                td_api::make_object<td_api::inputMessageDocument>(std::move(input_file), nullptr, false, nullptr);
+        }
+
+        auto response = send_query_sync(
+            td_api::make_object<td_api::sendMessage>(
+                chat_id, nullptr, nullptr, nullptr, nullptr, std::move(input_content)
+            )
+        );
+
+        if (response->get_id() == td_api::message::ID) {
+            auto msg_obj = td::move_tl_object_as<td_api::message>(response);
+            auto message = convert_message(*msg_obj);
+            cache_->cache_message(message);
+            return message;
+        }
+
+        throw OperationException("Failed to send file by remote ID");
+    }
+
     // Download file using remote file ID (persistent string)
     std::string download_file_sync(const std::string& remote_file_id, const std::string& destination_path) {
         // First, get the file info using remote ID
-        auto file_response =
-            send_query_sync(td_api::make_object<td_api::getRemoteFile>(remote_file_id, nullptr));
+        auto file_response = send_query_sync(td_api::make_object<td_api::getRemoteFile>(remote_file_id, nullptr));
 
         if (file_response->get_id() != td_api::file::ID) {
             throw FileNotFoundException(remote_file_id);
@@ -1054,6 +1248,15 @@ private:
     // Message callback
     std::function<void(const Message&)> message_callback_;
     std::mutex message_callback_mutex_;
+
+    // Pending upload tracking for deduplication cache
+    struct PendingUploadInfo {
+        std::string temp_path;
+        std::string file_hash;
+        int64_t file_size;
+    };
+    std::map<int64_t, PendingUploadInfo> pending_upload_files_;
+    std::mutex pending_uploads_mutex_;
 
 public:
     void set_message_callback(std::function<void(const Message&)> callback) {
@@ -1167,6 +1370,25 @@ TelegramClient::get_messages_until(int64_t chat_id, std::size_t min_messages, st
 
 Task<Message> TelegramClient::send_file(int64_t chat_id, const std::string& path, SendMode mode) {
     co_return impl_->send_file_sync(chat_id, path, mode);
+}
+
+Task<Message> TelegramClient::send_file(
+    int64_t chat_id,
+    const std::string& path,
+    SendMode mode,
+    const std::string& file_hash,
+    int64_t file_size
+) {
+    co_return impl_->send_file_sync(chat_id, path, mode, file_hash, file_size);
+}
+
+Task<Message> TelegramClient::send_file_by_id(
+    int64_t chat_id,
+    const std::string& remote_file_id,
+    const std::string& filename,
+    SendMode mode
+) {
+    co_return impl_->send_file_by_id_sync(chat_id, remote_file_id, filename, mode);
 }
 
 Task<std::vector<FileListItem>> TelegramClient::list_media(int64_t chat_id) {
