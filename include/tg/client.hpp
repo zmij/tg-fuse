@@ -1,0 +1,127 @@
+#pragma once
+
+#include "tg/async.hpp"
+#include "tg/cache.hpp"
+#include "tg/types.hpp"
+
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace tg {
+
+class TelegramClient {
+public:
+    // Configuration for the client
+    struct Config {
+        int32_t api_id;
+        std::string api_hash;
+        std::string database_directory;  // TDLib database
+        std::string cache_directory;     // SQLite cache for tg-fuse
+        std::string files_directory;
+        std::string logs_directory;  // If set, TDLib logs go here instead of stderr
+        int32_t log_verbosity = 2;   // 0=fatal, 1=error, 2=warning, 3=info, 4+=debug
+        bool use_test_dc = false;    // Use test data center
+        bool use_file_database = true;
+        bool use_chat_info_database = true;
+        bool use_message_database = true;
+        bool enable_storage_optimiser = true;
+    };
+
+    explicit TelegramClient(const Config& config);
+    ~TelegramClient();
+
+    // Disable copy
+    TelegramClient(const TelegramClient&) = delete;
+    TelegramClient& operator=(const TelegramClient&) = delete;
+
+    // Initialisation & lifecycle
+    Task<void> start();
+    Task<void> stop();
+
+    // Authentication
+    Task<AuthState> get_auth_state();
+    Task<void> login(const std::string& phone);
+    Task<void> submit_code(const std::string& code);
+    Task<void> submit_password(const std::string& password);
+    Task<void> logout();
+
+    // Entity listing
+    Task<std::vector<User>> get_users();
+    Task<std::vector<Chat>> get_groups();
+    Task<std::vector<Chat>> get_channels();
+    Task<std::vector<Chat>> get_all_chats();
+
+    /// Preload chats from TDLib (triggers updateNewChat events for all chats)
+    /// Call this early to populate the cache quickly instead of waiting for lazy updates
+    Task<void> preload_chats(int32_t limit = 1000);
+
+    // Entity lookup
+    Task<std::optional<Chat>> resolve_username(const std::string& username);
+    Task<std::optional<Chat>> get_chat(int64_t chat_id);
+    Task<std::optional<User>> get_user(int64_t user_id);
+    Task<User> get_me();  // Get the current logged-in user
+
+    // Messaging
+    Task<Message> send_text(int64_t chat_id, const std::string& text);
+    Task<std::vector<Message>> get_messages(int64_t chat_id, int limit = 100);
+    Task<std::vector<Message>> get_last_n_messages(int64_t chat_id, int n);
+
+    /// Fetch messages iteratively until condition is met
+    /// Fetches at least min_messages, and continues until the oldest message
+    /// is older than max_age or there are no more messages.
+    /// @param chat_id Chat to fetch from
+    /// @param min_messages Minimum messages to fetch
+    /// @param max_age Maximum age of oldest message
+    /// @return Vector of messages (unsorted, caller should sort)
+    Task<std::vector<Message>>
+    get_messages_until(int64_t chat_id, std::size_t min_messages, std::chrono::seconds max_age);
+
+    // File operations
+    Task<Message> send_file(int64_t chat_id, const std::string& path, SendMode mode = SendMode::AUTO);
+    /// Send file with hash for upload deduplication cache
+    Task<Message>
+    send_file(int64_t chat_id, const std::string& path, SendMode mode, const std::string& file_hash, int64_t file_size);
+    Task<Message>
+    send_file_by_id(int64_t chat_id, const std::string& remote_file_id, const std::string& filename, SendMode mode);
+    Task<std::vector<FileListItem>> list_media(int64_t chat_id);
+    Task<std::vector<FileListItem>> list_files(int64_t chat_id);
+    Task<std::string> download_file(const std::string& file_id, const std::string& destination_path = "");
+
+    // Chat status polling
+    Task<ChatStatus> get_chat_status(int64_t chat_id);
+
+    // Get user bio (lazy loaded)
+    Task<std::string> get_user_bio(int64_t user_id);
+
+    // Cache access
+    CacheManager& cache() { return *cache_; }
+    const CacheManager& cache() const { return *cache_; }
+
+    // Event callbacks
+    using MessageCallback = std::function<void(const Message&)>;
+    using ChatCallback = std::function<void(const Chat&)>;
+    using UserCallback = std::function<void(const User&)>;
+
+    /// Set callback for new messages
+    /// The callback is called from the TDLib event loop thread
+    void set_message_callback(MessageCallback callback);
+
+    /// Set callback for new/updated chats
+    /// Called when TDLib sends updateNewChat events (e.g., during startup)
+    void set_chat_callback(ChatCallback callback);
+
+    /// Set callback for new/updated users
+    /// Called when TDLib sends updateUser events
+    void set_user_callback(UserCallback callback);
+
+private:
+    class Impl;
+    Config config_;
+    std::unique_ptr<CacheManager> cache_;
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace tg
