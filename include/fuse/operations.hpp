@@ -26,6 +26,8 @@ public:
     int open(const char* path, struct fuse_file_info* fi) override;
     int read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info* fi) override;
     int release(const char* path, struct fuse_file_info* fi) override;
+    int write(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi) override;
+    int truncate(const char* path, off_t size) override;
 
 private:
     std::shared_ptr<DataProvider> provider_;

@@ -5,6 +5,8 @@
 #include <spdlog/spdlog.h>
 #include <sqlite3.h>
 
+#include <chrono>
+
 namespace tg {
 
 namespace {
@@ -123,6 +125,15 @@ void CacheManager::create_tables() {
 
         CREATE INDEX IF NOT EXISTS idx_files_chat_type ON files(chat_id, type);
         CREATE INDEX IF NOT EXISTS idx_files_timestamp ON files(chat_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS chat_message_stats (
+            chat_id INTEGER PRIMARY KEY,
+            message_count INTEGER NOT NULL DEFAULT 0,
+            content_size INTEGER NOT NULL DEFAULT 0,
+            last_message_time INTEGER NOT NULL DEFAULT 0,
+            last_fetch_time INTEGER NOT NULL DEFAULT 0,
+            oldest_message_time INTEGER NOT NULL DEFAULT 0
+        );
     )";
 
     exec_sql(db_, schema);
@@ -749,6 +760,175 @@ void CacheManager::cleanup_old_messages(int64_t older_than_timestamp) {
     sqlite3_bind_int64(stmt, 1, older_than_timestamp);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
+}
+
+void CacheManager::update_chat_message_stats(const ChatMessageStats& stats) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const char* sql = R"(
+        INSERT OR REPLACE INTO chat_message_stats
+        (chat_id, message_count, content_size, last_message_time, last_fetch_time, oldest_message_time)
+        VALUES (?, ?, ?, ?, ?, ?)
+    )";
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw DatabaseException("Failed to prepare statement");
+    }
+
+    sqlite3_bind_int64(stmt, 1, stats.chat_id);
+    sqlite3_bind_int64(stmt, 2, static_cast<int64_t>(stats.message_count));
+    sqlite3_bind_int64(stmt, 3, static_cast<int64_t>(stats.content_size));
+    sqlite3_bind_int64(stmt, 4, stats.last_message_time);
+    sqlite3_bind_int64(stmt, 5, stats.last_fetch_time);
+    sqlite3_bind_int64(stmt, 6, stats.oldest_message_time);
+
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        throw DatabaseException("Failed to update chat message stats");
+    }
+
+    sqlite3_finalize(stmt);
+}
+
+std::optional<ChatMessageStats> CacheManager::get_chat_message_stats(int64_t chat_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const char* sql = "SELECT * FROM chat_message_stats WHERE chat_id = ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw DatabaseException("Failed to prepare statement");
+    }
+
+    sqlite3_bind_int64(stmt, 1, chat_id);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        ChatMessageStats stats;
+        stats.chat_id = sqlite3_column_int64(stmt, 0);
+        stats.message_count = static_cast<std::size_t>(sqlite3_column_int64(stmt, 1));
+        stats.content_size = static_cast<std::size_t>(sqlite3_column_int64(stmt, 2));
+        stats.last_message_time = sqlite3_column_int64(stmt, 3);
+        stats.last_fetch_time = sqlite3_column_int64(stmt, 4);
+        stats.oldest_message_time = sqlite3_column_int64(stmt, 5);
+
+        sqlite3_finalize(stmt);
+        return stats;
+    }
+
+    sqlite3_finalize(stmt);
+    return std::nullopt;
+}
+
+std::vector<ChatMessageStats> CacheManager::get_all_chat_message_stats() {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const char* sql = "SELECT * FROM chat_message_stats ORDER BY last_message_time DESC";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw DatabaseException("Failed to prepare statement");
+    }
+
+    std::vector<ChatMessageStats> result;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        ChatMessageStats stats;
+        stats.chat_id = sqlite3_column_int64(stmt, 0);
+        stats.message_count = static_cast<std::size_t>(sqlite3_column_int64(stmt, 1));
+        stats.content_size = static_cast<std::size_t>(sqlite3_column_int64(stmt, 2));
+        stats.last_message_time = sqlite3_column_int64(stmt, 3);
+        stats.last_fetch_time = sqlite3_column_int64(stmt, 4);
+        stats.oldest_message_time = sqlite3_column_int64(stmt, 5);
+
+        result.push_back(std::move(stats));
+    }
+
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+std::vector<Message> CacheManager::get_messages_for_display(int64_t chat_id, int64_t max_age_seconds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    auto now = std::chrono::system_clock::now();
+    auto cutoff = now - std::chrono::seconds(max_age_seconds);
+    auto cutoff_ts = std::chrono::duration_cast<std::chrono::seconds>(cutoff.time_since_epoch()).count();
+
+    const char* sql = "SELECT * FROM messages WHERE chat_id = ? AND timestamp >= ? ORDER BY timestamp ASC";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw DatabaseException("Failed to prepare statement");
+    }
+
+    sqlite3_bind_int64(stmt, 1, chat_id);
+    sqlite3_bind_int64(stmt, 2, cutoff_ts);
+
+    std::vector<Message> messages;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        Message msg;
+        msg.id = sqlite3_column_int64(stmt, 0);
+        msg.chat_id = sqlite3_column_int64(stmt, 1);
+        msg.sender_id = sqlite3_column_int64(stmt, 2);
+        msg.timestamp = sqlite3_column_int64(stmt, 3);
+        if (sqlite3_column_text(stmt, 4)) {
+            msg.text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        }
+        msg.is_outgoing = sqlite3_column_int(stmt, 5) != 0;
+
+        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+            MediaInfo media;
+            media.type = int_to_media_type(sqlite3_column_int(stmt, 6));
+            if (sqlite3_column_text(stmt, 7)) {
+                media.file_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+            }
+            if (sqlite3_column_text(stmt, 8)) {
+                media.filename = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+            }
+            if (sqlite3_column_text(stmt, 9)) {
+                media.mime_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 9));
+            }
+            media.file_size = sqlite3_column_int64(stmt, 10);
+
+            if (sqlite3_column_type(stmt, 11) != SQLITE_NULL) {
+                media.local_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 11));
+            }
+            if (sqlite3_column_type(stmt, 12) != SQLITE_NULL) {
+                media.width = sqlite3_column_int(stmt, 12);
+            }
+            if (sqlite3_column_type(stmt, 13) != SQLITE_NULL) {
+                media.height = sqlite3_column_int(stmt, 13);
+            }
+            if (sqlite3_column_type(stmt, 14) != SQLITE_NULL) {
+                media.duration = sqlite3_column_int(stmt, 14);
+            }
+
+            msg.media = std::move(media);
+        }
+
+        messages.push_back(std::move(msg));
+    }
+
+    sqlite3_finalize(stmt);
+    return messages;
+}
+
+void CacheManager::evict_old_messages(int64_t chat_id, int64_t older_than_timestamp) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const char* sql = "DELETE FROM messages WHERE chat_id = ? AND timestamp < ?";
+    sqlite3_stmt* stmt;
+
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw DatabaseException("Failed to prepare statement");
+    }
+
+    sqlite3_bind_int64(stmt, 1, chat_id);
+    sqlite3_bind_int64(stmt, 2, older_than_timestamp);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    spdlog::debug("Evicted old messages from chat {} (older than {})", chat_id, older_than_timestamp);
 }
 
 }  // namespace tg

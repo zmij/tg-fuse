@@ -73,6 +73,22 @@ static int fuse_release_wrapper(const char* path, struct fuse_file_info* fi) {
     return impl->release(path, fi);
 }
 
+static int fuse_write_wrapper(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi) {
+    auto* impl = PlatformAdapter::get_implementation();
+    if (!impl) {
+        return -ENOENT;
+    }
+    return impl->write(path, buf, size, offset, fi);
+}
+
+static int fuse_truncate_wrapper(const char* path, off_t size) {
+    auto* impl = PlatformAdapter::get_implementation();
+    if (!impl) {
+        return -ENOENT;
+    }
+    return impl->truncate(path, size);
+}
+
 #else
 // libfuse3 callbacks
 
@@ -140,6 +156,23 @@ static int fuse_release_wrapper(const char* path, struct fuse_file_info* fi) {
     return impl->release(path, fi);
 }
 
+static int fuse_write_wrapper(const char* path, const char* buf, size_t size, off_t offset, struct fuse_file_info* fi) {
+    auto* impl = PlatformAdapter::get_implementation();
+    if (!impl) {
+        return -ENOENT;
+    }
+    return impl->write(path, buf, size, offset, fi);
+}
+
+static int fuse_truncate_wrapper(const char* path, off_t size, struct fuse_file_info* fi) {
+    (void)fi;  // Unused
+    auto* impl = PlatformAdapter::get_implementation();
+    if (!impl) {
+        return -ENOENT;
+    }
+    return impl->truncate(path, size);
+}
+
 #endif
 
 struct fuse_operations PlatformAdapter::get_operations(FuseOperations& impl) {
@@ -154,6 +187,8 @@ struct fuse_operations PlatformAdapter::get_operations(FuseOperations& impl) {
     ops.open = fuse_open_wrapper;
     ops.read = fuse_read_wrapper;
     ops.release = fuse_release_wrapper;
+    ops.write = fuse_write_wrapper;
+    ops.truncate = fuse_truncate_wrapper;
 
     return ops;
 }
